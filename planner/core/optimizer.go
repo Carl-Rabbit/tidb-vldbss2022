@@ -17,6 +17,7 @@ package core
 import (
 	"context"
 	"math"
+	"sort"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/config"
@@ -39,7 +40,6 @@ import (
 	"github.com/pingcap/tidb/util/tracing"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 )
 
 // OptimizeAstNode optimizes the query to a physical plan directly.
@@ -306,40 +306,34 @@ func DoOptimize(ctx context.Context, sctx sessionctx.Context, flag uint64, logic
 func refineCETrace(sctx sessionctx.Context) {
 	stmtCtx := sctx.GetSessionVars().StmtCtx
 	stmtCtx.OptimizerCETrace = tracing.DedupCETrace(stmtCtx.OptimizerCETrace)
-	slices.SortFunc(stmtCtx.OptimizerCETrace, func(i, j *tracing.CETraceRecord) bool {
-		if i == nil && j != nil {
+	sort.Slice(stmtCtx.OptimizerCETrace, func(i, j int) bool {
+		if stmtCtx.OptimizerCETrace[i] == nil && stmtCtx.OptimizerCETrace[j] != nil {
 			return true
 		}
-		if i == nil || j == nil {
+		if stmtCtx.OptimizerCETrace[i] == nil || stmtCtx.OptimizerCETrace[j] == nil {
 			return false
 		}
 
-		if i.TableID != j.TableID {
-			return i.TableID < j.TableID
+		if stmtCtx.OptimizerCETrace[i].TableID != stmtCtx.OptimizerCETrace[j].TableID {
+			return stmtCtx.OptimizerCETrace[i].TableID < stmtCtx.OptimizerCETrace[j].TableID
 		}
-		if i.Type != j.Type {
-			return i.Type < j.Type
+		if stmtCtx.OptimizerCETrace[i].Type != stmtCtx.OptimizerCETrace[j].Type {
+			return stmtCtx.OptimizerCETrace[i].Type < stmtCtx.OptimizerCETrace[j].Type
 		}
-		if i.Expr != j.Expr {
-			return i.Expr < j.Expr
+		if stmtCtx.OptimizerCETrace[i].Expr != stmtCtx.OptimizerCETrace[j].Expr {
+			return stmtCtx.OptimizerCETrace[i].Expr < stmtCtx.OptimizerCETrace[j].Expr
 		}
-		return i.RowCount < j.RowCount
+		return stmtCtx.OptimizerCETrace[i].RowCount < stmtCtx.OptimizerCETrace[j].RowCount
 	})
 	traceRecords := stmtCtx.OptimizerCETrace
-	is := sctx.GetDomainInfoSchema().(infoschema.InfoSchema)
+	is := sctx.GetInfoSchema().(infoschema.InfoSchema)
 	for _, rec := range traceRecords {
 		tbl, ok := is.TableByID(rec.TableID)
-		if ok {
-			rec.TableName = tbl.Meta().Name.O
-			continue
+		if !ok {
+			logutil.BgLogger().Warn("[OptimizerTrace] Failed to find table in infoschema",
+				zap.Int64("table id", rec.TableID))
 		}
-		tbl, _, _ = is.FindTableByPartitionID(rec.TableID)
-		if tbl != nil {
-			rec.TableName = tbl.Meta().Name.O
-			continue
-		}
-		logutil.BgLogger().Warn("[OptimizerTrace] Failed to find table in infoschema",
-			zap.Int64("table id", rec.TableID))
+		rec.TableName = tbl.Meta().Name.O
 	}
 }
 

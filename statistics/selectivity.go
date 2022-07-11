@@ -16,9 +16,14 @@ package statistics
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
 	"math"
 	"math/bits"
+	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/expression"
@@ -175,6 +180,139 @@ func isColEqCorCol(filter expression.Expression) *expression.Column {
 	return nil
 }
 
+var (
+	// for simplicity, only support >, <, >= and <=
+	supportedOps = map[string]bool{
+		ast.LE: true,
+		ast.GE: true,
+		ast.GT: true,
+		ast.LT: true,
+	}
+)
+
+// fallbackToInternalCardinalityEstimator checks whether to fall back to the internal cardinality estimator.
+func fallbackToInternalCardinalityEstimator(ctx sessionctx.Context, expr expression.Expression) (fallback bool) {
+	// for simplicity, only support predicates like `col op INT_val`
+	f, ok := expr.(*expression.ScalarFunction)
+	if !ok {
+		return true
+	}
+	if _, supported := supportedOps[f.FuncName.L]; !supported {
+		return true
+	}
+
+	// for simplicity, we only considered these columns above in lab1
+	col, ok := f.GetArgs()[0].(*expression.Column)
+	if !ok {
+		return true
+	}
+	// col.OrigName = db.table.colum, e.g. imdb.title.kind_id
+	tmp := strings.Split(col.OrigName, ".")
+	if len(tmp) != 3 { // unexpected
+		return true
+	}
+	switch strings.ToLower(tmp[1] + "." + tmp[2]) {
+	case "title.kind_id", "title.production_year", "title.imdb_id", "title.episode_of_id", "title.season_nr", "title.episode_nr":
+	default:
+		return true
+	}
+
+	// for simplicity, we only support INT value here
+	con, ok := f.GetArgs()[1].(*expression.Constant)
+	if !ok {
+		return true
+	}
+	if con.RetType.EvalType() != types.ETInt {
+		return true
+	}
+	return false
+}
+
+// wrapCNFExprsAsRequest converts these expressions into a request.
+// exprs: exprs[0] AND exprs[1] AND exprs[2] ...
+func wrapCNFExprsAsRequest(exprs expression.CNFExprs) ([]byte, error) {
+	exprStrs := make([]string, 0, len(exprs))
+	for _, expr := range exprs {
+		f := expr.(*expression.ScalarFunction)
+		col := f.GetArgs()[0].(*expression.Column)
+		val := f.GetArgs()[1].(*expression.Constant)
+		// For simplicity, only support predicates like `col op INT_val`, and
+		//   op can only be '>', '<', '>=', '<=', and
+		//   col can only be columns appeared in lab1: kind_id, production_year, imdb_id, episode_of_id, season_nr, episode_nr.
+		//   e.g. imdb.title.kind_id < 7
+		// All other unsupported predicates are filtered by fallbackToInternalCardinalityEstimator.
+
+		// col.OrigName is formatted as `db.table.col`, e.g. imdb.title.kind_id
+		colName := strings.Split(col.OrigName, ".")[2]
+		intVal := val.Value.GetInt64()
+		fmt.Println(colName, f.FuncName.L, intVal)
+
+		// YOUR CODE HERE: convert this expression into a string.
+		// Don't forget to convert '>=' and '<=' to '>' and '<' since the model in lab1 cannot support '>=' and '<=',
+		//   for example, 'kind_id >= 5' should be converted to 'kind_id > 4'
+		exprStr := ""
+		exprStr += colName
+		if f.FuncName.L == ast.LT {
+			exprStr += " < "
+		} else if f.FuncName.L == ast.LE {
+			exprStr += " < "
+		} else if f.FuncName.L == ast.GT {
+			exprStr += " > "
+		} else if f.FuncName.L == ast.GE {
+			exprStr += " > "
+		}
+		exprStr += fmt.Sprintf("%d", intVal)
+		exprStrs = append(exprStrs, exprStr)
+	}
+
+	return []byte(strings.Join(exprStrs, " and ")), nil
+}
+
+// parseResponseAsSelectivity parse the response data.
+// The response data is expected to be in JSON format:
+// {"selectivity": 0.2333, "err_msg": "..."}
+func parseResponseAsSelectivity(respData []byte) (float64, error) {
+	type Resp struct {
+		Selectivity float64 `json:"selectivity"`
+		ErrMsg      string  `json:"err_msg"`
+	}
+	var resp Resp
+	if err := json.Unmarshal(respData, &resp); err != nil {
+		return 0, err
+	}
+	if resp.ErrMsg != "" {
+		return 0, errors.New(resp.ErrMsg)
+	}
+	return resp.Selectivity, nil
+}
+
+// callExternalCardinalityEstimator tries to call the external cardinality estimator.
+// exprs: exprs[0] AND exprs[1] AND exprs[2] ...
+func callExternalCardinalityEstimator(ctx sessionctx.Context, exprs expression.CNFExprs) (selectivity float64, fallback bool, err error) {
+	// check whether to fall back to the internal estimator
+	for _, expr := range exprs {
+		if fallbackToInternalCardinalityEstimator(ctx, expr) {
+			return 0, true, nil
+		}
+	}
+	// wrap these predicates into a request
+	conds, err := wrapCNFExprsAsRequest(exprs)
+	if err != nil {
+		return 0, false, err
+	}
+	// send this request to the external estimator
+	resp, err := requestTo(ctx.GetSessionVars().ExternalCardinalityEstimatorAddress, conds)
+	if err != nil {
+		return 0, false, err
+	}
+	// parse the resp and get the selectivity
+	sel, err := parseResponseAsSelectivity(resp)
+	if err != nil {
+		return 0, false, err
+	}
+	return sel, false, nil
+}
+
 // Selectivity is a function calculate the selectivity of the expressions.
 // The definition of selectivity is (row count after filter / row count before filter).
 // And exprs must be CNF now, in other words, `exprs[0] and exprs[1] and ... and exprs[len - 1]` should be held when you call this.
@@ -184,6 +322,19 @@ func (coll *HistColl) Selectivity(ctx sessionctx.Context, exprs []expression.Exp
 	if coll.Count == 0 || len(exprs) == 0 {
 		return 1, nil, nil
 	}
+
+	if ctx.GetSessionVars().ExternalCardinalityEstimatorAddress != "" {
+		sel, fallback, err := callExternalCardinalityEstimator(ctx, exprs)
+		if !fallback && err == nil {
+			ctx.GetSessionVars().StmtCtx.AppendWarning(fmt.Errorf("get selectivity(%v)=%.4f successfully from the external model", exprs, sel))
+			return sel, nil, nil
+		}
+		if err != nil {
+			ctx.GetSessionVars().StmtCtx.AppendWarning(fmt.Errorf("cannot get selectivity of %v from the external estimator %v: %v",
+				exprs, ctx.GetSessionVars().ExternalCardinalityEstimatorAddress, err))
+		}
+	}
+
 	ret := 1.0
 	sc := ctx.GetSessionVars().StmtCtx
 	tableID := coll.PhysicalID
@@ -622,4 +773,20 @@ func ExprToString(e expression.Expression) (string, error) {
 		return buffer.String(), nil
 	}
 	return "", errors.New("unexpected type of Expression")
+}
+
+func requestTo(addr string, data []byte) (respData []byte, err error) {
+	buf := bytes.NewBuffer(data)
+	resp, err := http.Post(addr, "application/json", buf)
+	if err != nil {
+		return nil, err
+	}
+	respData, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if err := resp.Body.Close(); err != nil {
+		return nil, err
+	}
+	return respData, nil
 }

@@ -37,8 +37,8 @@ import (
 	"github.com/pingcap/tidb/domain/infosync"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/parser/model"
-	"github.com/pingcap/tidb/session"
 	"github.com/pingcap/tidb/store/mockstore"
+	"github.com/pingcap/tidb/testkit"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/oracle/oracles"
@@ -97,18 +97,16 @@ type mockGCWorkerSuite struct {
 }
 
 func createGCWorkerSuite(t *testing.T) (s *mockGCWorkerSuite, clean func()) {
-	return createGCWorkerSuiteWithStoreType(t, mockstore.EmbedUnistore)
-}
-
-func createGCWorkerSuiteWithStoreType(t *testing.T, storeType mockstore.StoreType) (s *mockGCWorkerSuite, clean func()) {
 	s = new(mockGCWorkerSuite)
+
 	hijackClient := func(client tikv.Client) tikv.Client {
 		s.client = &mockGCWorkerClient{Client: client}
 		client = s.client
 		return client
 	}
+
 	opts := []mockstore.MockTiKVStoreOption{
-		mockstore.WithStoreType(storeType),
+		mockstore.WithStoreType(mockstore.MockTiKV),
 		mockstore.WithClusterInspector(func(c testutils.Cluster) {
 			s.initRegion.storeIDs, s.initRegion.peerIDs, s.initRegion.regionID, _ = mockstore.BootstrapWithMultiStores(c, 3)
 			s.cluster = c
@@ -121,13 +119,7 @@ func createGCWorkerSuiteWithStoreType(t *testing.T, storeType mockstore.StoreTyp
 	}
 
 	s.oracle = &oracles.MockOracle{}
-	store, err := mockstore.NewMockStore(opts...)
-	require.NoError(t, err)
-	store.GetOracle().Close()
-	store.(tikv.Storage).SetOracle(s.oracle)
-	dom, clean := bootstrap(t, store, 0)
-	s.store, s.dom = store, dom
-
+	s.store, s.dom, clean = testkit.CreateMockStoreWithOracle(t, s.oracle, opts...)
 	s.tikvStore = s.store.(tikv.Storage)
 
 	gcWorker, err := NewGCWorker(s.store, s.pdClient)
@@ -951,14 +943,7 @@ func TestResolveLockRangeMeetRegionCacheMiss(t *testing.T) {
 }
 
 func TestResolveLockRangeMeetRegionEnlargeCausedByRegionMerge(t *testing.T) {
-	// TODO: Update the test code.
-	// This test rely on the obsolete mock tikv, but mock tikv does not implement paging.
-	// So use this failpoint to force non-paging protocol.
-	failpoint.Enable("github.com/pingcap/tidb/store/copr/DisablePaging", `return`)
-	defer func() {
-		require.NoError(t, failpoint.Disable("github.com/pingcap/tidb/store/copr/DisablePaging"))
-	}()
-	s, clean := createGCWorkerSuiteWithStoreType(t, mockstore.MockTiKV)
+	s, clean := createGCWorkerSuite(t)
 	defer clean()
 
 	var (
@@ -1779,20 +1764,4 @@ func TestGCWithPendingTxn(t *testing.T) {
 
 	err = txn.Commit(ctx)
 	require.NoError(t, err)
-}
-
-func bootstrap(t testing.TB, store kv.Storage, lease time.Duration) (*domain.Domain, func()) {
-	session.SetSchemaLease(lease)
-	session.DisableStats4Test()
-	dom, err := session.BootstrapSession(store)
-	require.NoError(t, err)
-
-	dom.SetStatsUpdating(true)
-
-	clean := func() {
-		dom.Close()
-		err := store.Close()
-		require.NoError(t, err)
-	}
-	return dom, clean
 }

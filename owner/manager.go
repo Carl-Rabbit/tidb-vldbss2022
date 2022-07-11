@@ -54,9 +54,6 @@ type Manager interface {
 	Cancel()
 	// RequireOwner requires the ownerManager is owner.
 	RequireOwner(ctx context.Context) error
-
-	// SetBeOwnerHook sets a hook. The hook is called before becoming an owner.
-	SetBeOwnerHook(hook func())
 }
 
 const (
@@ -71,17 +68,16 @@ type DDLOwnerChecker interface {
 
 // ownerManager represents the structure which is used for electing owner.
 type ownerManager struct {
-	id          string // id is the ID of the manager.
-	key         string
-	ctx         context.Context
-	prompt      string
-	logPrefix   string
-	logCtx      context.Context
-	etcdCli     *clientv3.Client
-	cancel      context.CancelFunc
-	elec        unsafe.Pointer
-	wg          sync.WaitGroup
-	beOwnerHook func()
+	id        string // id is the ID of the manager.
+	key       string
+	ctx       context.Context
+	prompt    string
+	logPrefix string
+	logCtx    context.Context
+	etcdCli   *clientv3.Client
+	cancel    context.CancelFunc
+	elec      unsafe.Pointer
+	wg        sync.WaitGroup
 }
 
 // NewOwnerManager creates a new Manager.
@@ -119,10 +115,6 @@ func (m *ownerManager) Cancel() {
 // RequireOwner implements Manager.RequireOwner interface.
 func (m *ownerManager) RequireOwner(ctx context.Context) error {
 	return nil
-}
-
-func (m *ownerManager) SetBeOwnerHook(hook func()) {
-	m.beOwnerHook = hook
 }
 
 // ManagerSessionTTL is the etcd session's TTL in seconds. It's exported for testing.
@@ -174,9 +166,6 @@ func (m *ownerManager) ResignOwner(ctx context.Context) error {
 }
 
 func (m *ownerManager) toBeOwner(elec *concurrency.Election) {
-	if m.beOwnerHook != nil {
-		m.beOwnerHook()
-	}
 	atomic.StorePointer(&m.elec, unsafe.Pointer(elec))
 }
 

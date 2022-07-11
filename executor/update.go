@@ -42,11 +42,11 @@ type UpdateExec struct {
 
 	// updatedRowKeys is a map for unique (TableAlias, handle) pair.
 	// The value is true if the row is changed, or false otherwise
-	updatedRowKeys map[int]*kv.MemAwareHandleMap[bool]
+	updatedRowKeys map[int]*kv.HandleMap
 	tblID2table    map[int64]table.Table
 	// mergedRowData is a map for unique (Table, handle) pair.
 	// The value is cached table row
-	mergedRowData          map[int64]*kv.MemAwareHandleMap[[]types.Datum]
+	mergedRowData          map[int64]*kv.HandleMap
 	multiUpdateOnSameTable map[int64]bool
 
 	matched uint64 // a counter of matched rows during update
@@ -71,7 +71,7 @@ type UpdateExec struct {
 // prepare `handles`, `tableUpdatable`, `changed` to avoid re-computations.
 func (e *UpdateExec) prepare(row []types.Datum) (err error) {
 	if e.updatedRowKeys == nil {
-		e.updatedRowKeys = make(map[int]*kv.MemAwareHandleMap[bool])
+		e.updatedRowKeys = make(map[int]*kv.HandleMap)
 	}
 	e.handles = e.handles[:0]
 	e.tableUpdatable = e.tableUpdatable[:0]
@@ -79,7 +79,7 @@ func (e *UpdateExec) prepare(row []types.Datum) (err error) {
 	e.matches = e.matches[:0]
 	for _, content := range e.tblColPosInfos {
 		if e.updatedRowKeys[content.Start] == nil {
-			e.updatedRowKeys[content.Start] = kv.NewMemAwareHandleMap[bool]()
+			e.updatedRowKeys[content.Start] = kv.NewHandleMap()
 		}
 		handle, err := content.HandleCols.BuildHandleByDatums(row)
 		if err != nil {
@@ -102,7 +102,7 @@ func (e *UpdateExec) prepare(row []types.Datum) (err error) {
 
 		changed, ok := e.updatedRowKeys[content.Start].Get(handle)
 		if ok {
-			e.changed = append(e.changed, changed)
+			e.changed = append(e.changed, changed.(bool))
 			e.matches = append(e.matches, false)
 		} else {
 			e.changed = append(e.changed, false)
@@ -114,7 +114,7 @@ func (e *UpdateExec) prepare(row []types.Datum) (err error) {
 
 func (e *UpdateExec) merge(row, newData []types.Datum, mergeGenerated bool) error {
 	if e.mergedRowData == nil {
-		e.mergedRowData = make(map[int64]*kv.MemAwareHandleMap[[]types.Datum])
+		e.mergedRowData = make(map[int64]*kv.HandleMap)
 	}
 	var mergedData []types.Datum
 	// merge updates from and into mergedRowData
@@ -135,13 +135,13 @@ func (e *UpdateExec) merge(row, newData []types.Datum, mergeGenerated bool) erro
 		flags := e.assignFlag[content.Start:content.End]
 
 		if e.mergedRowData[content.TblID] == nil {
-			e.mergedRowData[content.TblID] = kv.NewMemAwareHandleMap[[]types.Datum]()
+			e.mergedRowData[content.TblID] = kv.NewHandleMap()
 		}
 		tbl := e.tblID2table[content.TblID]
 		oldData := row[content.Start:content.End]
 		newTableData := newData[content.Start:content.End]
 		if v, ok := e.mergedRowData[content.TblID].Get(handle); ok {
-			mergedData = v
+			mergedData = v.([]types.Datum)
 			for i, flag := range flags {
 				if tbl.WritableCols()[i].IsGenerated() != mergeGenerated {
 					continue
@@ -156,10 +156,7 @@ func (e *UpdateExec) merge(row, newData []types.Datum, mergeGenerated bool) erro
 		} else {
 			mergedData = append([]types.Datum{}, newTableData...)
 		}
-
-		memDelta := e.mergedRowData[content.TblID].Set(handle, mergedData)
-		memDelta += types.EstimatedMemUsage(mergedData, 1) + int64(handle.ExtraMemSize())
-		e.memTracker.Consume(memDelta)
+		e.mergedRowData[content.TblID].Set(handle, mergedData)
 	}
 	return nil
 }
@@ -193,12 +190,7 @@ func (e *UpdateExec) exec(ctx context.Context, schema *expression.Schema, row, n
 		// Update row
 		changed, err1 := updateRecord(ctx, e.ctx, handle, oldData, newTableData, flags, tbl, false, e.memTracker)
 		if err1 == nil {
-			_, exist := e.updatedRowKeys[content.Start].Get(handle)
-			memDelta := e.updatedRowKeys[content.Start].Set(handle, changed)
-			if !exist {
-				memDelta += int64(handle.ExtraMemSize())
-			}
-			e.memTracker.Consume(memDelta)
+			e.updatedRowKeys[content.Start].Set(handle, changed)
 			continue
 		}
 
@@ -434,7 +426,6 @@ func (e *UpdateExec) Close() error {
 			txn.GetSnapshot().SetOption(kv.CollectRuntimeStats, nil)
 		}
 	}
-	defer e.memTracker.ReplaceBytesUsed(0)
 	return e.children[0].Close()
 }
 

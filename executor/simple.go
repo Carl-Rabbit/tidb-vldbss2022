@@ -15,9 +15,7 @@
 package executor
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -43,7 +41,6 @@ import (
 	"github.com/pingcap/tidb/plugin"
 	"github.com/pingcap/tidb/privilege"
 	"github.com/pingcap/tidb/sessionctx"
-	"github.com/pingcap/tidb/sessionctx/sessionstates"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/sessiontxn"
 	"github.com/pingcap/tidb/types"
@@ -154,8 +151,6 @@ func (e *SimpleExec) Next(ctx context.Context, req *chunk.Chunk) (err error) {
 		err = e.executeRenameUser(x)
 	case *ast.SetPwdStmt:
 		err = e.executeSetPwd(ctx, x)
-	case *ast.SetSessionStatesStmt:
-		err = e.executeSetSessionStates(ctx, x)
 	case *ast.KillStmt:
 		err = e.executeKillStmt(ctx, x)
 	case *ast.BinlogStmt:
@@ -1298,14 +1293,6 @@ func (e *SimpleExec) executeDropUser(ctx context.Context, s *ast.DropUserStmt) e
 			break
 		}
 
-		// delete privileges from mysql.columns_priv
-		sql.Reset()
-		sqlexec.MustFormatSQL(sql, `DELETE FROM %n.%n WHERE Host = %? and User = %?;`, mysql.SystemDB, mysql.ColumnPrivTable, user.Hostname, user.Username)
-		if _, err = sqlExecutor.ExecuteInternal(context.TODO(), sql.String()); err != nil {
-			failedUsers = append(failedUsers, user.String())
-			break
-		}
-
 		// delete relationship from mysql.role_edges
 		sql.Reset()
 		sqlexec.MustFormatSQL(sql, `DELETE FROM %n.%n WHERE TO_HOST = %? and TO_USER = %?;`, mysql.SystemDB, mysql.RoleEdgeTable, user.Hostname, user.Username)
@@ -1687,16 +1674,6 @@ func asyncDelayShutdown(p *os.Process, delay time.Duration) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func (e *SimpleExec) executeSetSessionStates(ctx context.Context, s *ast.SetSessionStatesStmt) error {
-	var sessionStates sessionstates.SessionStates
-	decoder := json.NewDecoder(bytes.NewReader([]byte(s.SessionStates)))
-	decoder.UseNumber()
-	if err := decoder.Decode(&sessionStates); err != nil {
-		return errors.Trace(err)
-	}
-	return e.ctx.DecodeSessionStates(ctx, e.ctx, &sessionStates)
 }
 
 func (e *SimpleExec) executeAdmin(s *ast.AdminStmt) error {

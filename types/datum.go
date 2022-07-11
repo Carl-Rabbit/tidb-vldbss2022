@@ -15,7 +15,6 @@
 package types
 
 import (
-	gjson "encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -749,7 +748,7 @@ func (d *Datum) compareString(sc *stmtctx.StatementContext, s string, comparer c
 		dt, err := ParseDatetime(sc, s)
 		return d.GetMysqlTime().Compare(dt), errors.Trace(err)
 	case KindMysqlDuration:
-		dur, _, err := ParseDuration(sc, s, MaxFsp)
+		dur, err := ParseDuration(sc, s, MaxFsp)
 		return d.GetMysqlDuration().Compare(dur), errors.Trace(err)
 	case KindMysqlSet:
 		return comparer.Compare(d.GetMysqlSet().String(), s), nil
@@ -796,7 +795,7 @@ func (d *Datum) compareMysqlDuration(sc *stmtctx.StatementContext, dur Duration)
 	case KindMysqlDuration:
 		return d.GetMysqlDuration().Compare(dur), nil
 	case KindString, KindBytes:
-		dDur, _, err := ParseDuration(sc, d.GetString(), MaxFsp)
+		dDur, err := ParseDuration(sc, d.GetString(), MaxFsp)
 		return dDur.Compare(dur), errors.Trace(err)
 	default:
 		return d.compareFloat64(sc, dur.Seconds())
@@ -1375,13 +1374,13 @@ func (d *Datum) convertToMysqlDuration(sc *stmtctx.StatementContext, target *Fie
 		if timeNum < -MaxDuration {
 			return ret, ErrWrongValue.GenWithStackByArgs(TimeStr, timeStr)
 		}
-		t, _, err := ParseDuration(sc, timeStr, fsp)
+		t, err := ParseDuration(sc, timeStr, fsp)
 		ret.SetMysqlDuration(t)
 		if err != nil {
 			return ret, errors.Trace(err)
 		}
 	case KindString, KindBytes:
-		t, _, err := ParseDuration(sc, d.GetString(), fsp)
+		t, err := ParseDuration(sc, d.GetString(), fsp)
 		ret.SetMysqlDuration(t)
 		if err != nil {
 			return ret, errors.Trace(err)
@@ -1392,7 +1391,7 @@ func (d *Datum) convertToMysqlDuration(sc *stmtctx.StatementContext, target *Fie
 		if err != nil {
 			return ret, errors.Trace(err)
 		}
-		t, _, err := ParseDuration(sc, s, fsp)
+		t, err := ParseDuration(sc, s, fsp)
 		ret.SetMysqlDuration(t)
 		if err != nil {
 			return ret, errors.Trace(err)
@@ -2009,62 +2008,6 @@ func (d *Datum) MemUsage() (sum int64) {
 	return EmptyDatumSize + int64(cap(d.b)) + int64(len(d.collation))
 }
 
-type jsonDatum struct {
-	K         byte       `json:"k"`
-	Decimal   uint16     `json:"decimal,omitempty"`
-	Length    uint32     `json:"length,omitempty"`
-	I         int64      `json:"i,omitempty"`
-	Collation string     `json:"collation,omitempty"`
-	B         []byte     `json:"b,omitempty"`
-	Time      Time       `json:"time,omitempty"`
-	MyDecimal *MyDecimal `json:"mydecimal,omitempty"`
-}
-
-// MarshalJSON implements Marshaler.MarshalJSON interface.
-func (d *Datum) MarshalJSON() ([]byte, error) {
-	jd := &jsonDatum{
-		K:         d.k,
-		Decimal:   d.decimal,
-		Length:    d.length,
-		I:         d.i,
-		Collation: d.collation,
-		B:         d.b,
-	}
-	switch d.k {
-	case KindMysqlTime:
-		jd.Time = d.GetMysqlTime()
-	case KindMysqlDecimal:
-		jd.MyDecimal = d.GetMysqlDecimal()
-	default:
-		if d.x != nil {
-			return nil, errors.New(fmt.Sprintf("unsupported type: %d", d.k))
-		}
-	}
-	return gjson.Marshal(jd)
-}
-
-// UnmarshalJSON implements Unmarshaler.UnmarshalJSON interface.
-func (d *Datum) UnmarshalJSON(data []byte) error {
-	var jd jsonDatum
-	if err := gjson.Unmarshal(data, &jd); err != nil {
-		return err
-	}
-	d.k = jd.K
-	d.decimal = jd.Decimal
-	d.length = jd.Length
-	d.i = jd.I
-	d.collation = jd.Collation
-	d.b = jd.B
-
-	switch jd.K {
-	case KindMysqlTime:
-		d.SetMysqlTime(jd.Time)
-	case KindMysqlDecimal:
-		d.SetMysqlDecimal(jd.MyDecimal)
-	}
-	return nil
-}
-
 func invalidConv(d *Datum, tp byte) (Datum, error) {
 	return Datum{}, errors.Errorf("cannot convert datum from %s to type %s", KindStr(d.Kind()), TypeStr(tp))
 }
@@ -2392,8 +2335,8 @@ func ChangeReverseResultByUpperLowerBound(
 		resRetType.SetType(mysql.TypeDouble)
 	case KindMysqlDecimal:
 		resRetType.SetType(mysql.TypeNewDecimal)
-		resRetType.SetFlenUnderLimit(int(res.GetMysqlDecimal().GetDigitsFrac() + res.GetMysqlDecimal().GetDigitsInt()))
-		resRetType.SetDecimalUnderLimit(int(res.GetMysqlDecimal().GetDigitsInt()))
+		resRetType.SetFlen(int(res.GetMysqlDecimal().GetDigitsFrac() + res.GetMysqlDecimal().GetDigitsInt()))
+		resRetType.SetDecimal(int(res.GetMysqlDecimal().GetDigitsInt()))
 	}
 	bound := getDatumBound(&resRetType, rType)
 	cmp, err := d.Compare(sc, &bound, collate.GetCollator(resRetType.GetCollate()))

@@ -478,6 +478,7 @@ func startWithSlash(s *Scanner) (tok int, pos Pos, lit string) {
 		}
 	case 'M': // '/*M' maybe MariaDB-specific comments
 		// no special treatment for now.
+		break
 
 	case '+': // '/*+' optimizer hints
 		// See https://dev.mysql.com/doc/refman/5.7/en/optimizer-hints.html
@@ -501,6 +502,7 @@ func startWithSlash(s *Scanner) (tok int, pos Pos, lit string) {
 		currentCharIsStar = true
 
 	default:
+		break
 	}
 
 	// standard C-like comment. read until we see '*/' then drop it.
@@ -572,7 +574,7 @@ func startWithAt(s *Scanner) (tok int, pos Pos, lit string) {
 			tok, lit = doubleAtIdentifier, s.r.data(&pos)
 		}
 	case invalid:
-		return
+		break
 	default:
 		tok = singleAtIdentifier
 	}

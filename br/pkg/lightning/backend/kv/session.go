@@ -246,11 +246,11 @@ type SessionOptions struct {
 }
 
 // NewSession creates a new trimmed down Session matching the options.
-func NewSession(options *SessionOptions, logger log.Logger) sessionctx.Context {
-	return newSession(options, logger)
+func NewSession(options *SessionOptions) sessionctx.Context {
+	return newSession(options)
 }
 
-func newSession(options *SessionOptions, logger log.Logger) *session {
+func newSession(options *SessionOptions) *session {
 	sqlMode := options.SQLMode
 	vars := variable.NewSessionVars()
 	vars.SkipUTF8Check = true
@@ -265,7 +265,7 @@ func newSession(options *SessionOptions, logger log.Logger) *session {
 	if options.SysVars != nil {
 		for k, v := range options.SysVars {
 			if err := vars.SetSystemVar(k, v); err != nil {
-				logger.DPanic("new session: failed to set system var",
+				log.L().DPanic("new session: failed to set system var",
 					log.ShortError(err),
 					zap.String("key", k))
 			}
@@ -273,7 +273,7 @@ func newSession(options *SessionOptions, logger log.Logger) *session {
 	}
 	vars.StmtCtx.TimeZone = vars.Location()
 	if err := vars.SetSystemVar("timestamp", strconv.FormatInt(options.Timestamp, 10)); err != nil {
-		logger.Warn("new session: failed to set timestamp",
+		log.L().Warn("new session: failed to set timestamp",
 			log.ShortError(err))
 	}
 	vars.TxnCtx = nil

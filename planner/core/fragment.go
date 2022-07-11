@@ -16,6 +16,7 @@ package core
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -31,7 +32,6 @@ import (
 	"github.com/pingcap/tidb/util/ranger"
 	"github.com/pingcap/tipb/go-tipb"
 	"go.uber.org/zap"
-	"golang.org/x/exp/slices"
 )
 
 // Fragment is cut from the whole pushed-down plan by network communication.
@@ -358,8 +358,8 @@ func (e *mppTaskGenerator) constructMPPTasksImpl(ctx context.Context, ts *Physic
 }
 
 func (e *mppTaskGenerator) constructMPPBuildTaskReqForPartitionedTable(ts *PhysicalTableScan, splitedRanges []*ranger.Range, partitions []table.PhysicalTable) (*kv.MPPBuildTasksRequest, []int64, error) {
-	slices.SortFunc(partitions, func(i, j table.PhysicalTable) bool {
-		return i.GetPhysicalID() < j.GetPhysicalID()
+	sort.Slice(partitions, func(i, j int) bool {
+		return partitions[i].GetPhysicalID() < partitions[j].GetPhysicalID()
 	})
 	partitionIDAndRanges := make([]kv.PartitionIDAndRanges, len(partitions))
 	allPartitionsIDs := make([]int64, len(partitions))

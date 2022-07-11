@@ -158,26 +158,20 @@ func (e *DeleteExec) doBatchDelete(ctx context.Context) error {
 }
 
 func (e *DeleteExec) composeTblRowMap(tblRowMap tableRowMapType, colPosInfos []plannercore.TblColPosInfo, joinedRow []types.Datum) error {
-	// iterate all the joined tables, and got the corresponding rows in joinedRow.
+	// iterate all the joined tables, and got the copresonding rows in joinedRow.
 	for _, info := range colPosInfos {
 		if unmatchedOuterRow(info, joinedRow) {
 			continue
 		}
 		if tblRowMap[info.TblID] == nil {
-			tblRowMap[info.TblID] = kv.NewMemAwareHandleMap[[]types.Datum]()
+			tblRowMap[info.TblID] = kv.NewHandleMap()
 		}
 		handle, err := info.HandleCols.BuildHandleByDatums(joinedRow)
 		if err != nil {
 			return err
 		}
 		// tblRowMap[info.TblID][handle] hold the row datas binding to this table and this handle.
-		_, exist := tblRowMap[info.TblID].Get(handle)
-		memDelta := tblRowMap[info.TblID].Set(handle, joinedRow[info.Start:info.End])
-		if !exist {
-			memDelta += types.EstimatedMemUsage(joinedRow, 1)
-			memDelta += int64(handle.ExtraMemSize())
-		}
-		e.memTracker.Consume(memDelta)
+		tblRowMap[info.TblID].Set(handle, joinedRow[info.Start:info.End])
 	}
 	return nil
 }
@@ -246,7 +240,6 @@ func (e *DeleteExec) removeRow(ctx sessionctx.Context, t table.Table, h kv.Handl
 
 // Close implements the Executor Close interface.
 func (e *DeleteExec) Close() error {
-	defer e.memTracker.ReplaceBytesUsed(0)
 	return e.children[0].Close()
 }
 
@@ -261,4 +254,4 @@ func (e *DeleteExec) Open(ctx context.Context) error {
 // tableRowMapType is a map for unique (Table, Row) pair. key is the tableID.
 // the key in map[int64]Row is the joined table handle, which represent a unique reference row.
 // the value in map[int64]Row is the deleting row.
-type tableRowMapType map[int64]*kv.MemAwareHandleMap[[]types.Datum]
+type tableRowMapType map[int64]*kv.HandleMap

@@ -301,10 +301,10 @@ func DefaultTypeForValue(value interface{}, tp *FieldType, char string, collate 
 		SetBinChsClnFlag(tp)
 	case *MyDecimal:
 		tp.SetType(mysql.TypeNewDecimal)
-		tp.SetFlenUnderLimit(len(x.ToString()))
-		tp.SetDecimalUnderLimit(int(x.digitsFrac))
+		tp.SetFlen(len(x.ToString()))
+		tp.SetDecimal(int(x.digitsFrac))
 		// Add the length for `.`.
-		tp.SetFlenUnderLimit(tp.GetFlen() + 1)
+		tp.SetFlen(tp.GetFlen() + 1)
 		SetBinChsClnFlag(tp)
 	case Enum:
 		tp.SetType(mysql.TypeEnum)

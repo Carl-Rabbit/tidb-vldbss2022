@@ -43,7 +43,6 @@ import (
 	"github.com/pingcap/tidb/br/pkg/lightning/config"
 	"github.com/pingcap/tidb/br/pkg/lightning/glue"
 	"github.com/pingcap/tidb/br/pkg/lightning/log"
-	"github.com/pingcap/tidb/br/pkg/lightning/metric"
 	"github.com/pingcap/tidb/br/pkg/lightning/mydump"
 	"github.com/pingcap/tidb/br/pkg/lightning/restore"
 	"github.com/pingcap/tidb/br/pkg/lightning/tikv"
@@ -52,9 +51,6 @@ import (
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/br/pkg/utils"
 	"github.com/pingcap/tidb/br/pkg/version/build"
-	"github.com/pingcap/tidb/util/promutil"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/shurcooL/httpgzip"
 	"go.uber.org/zap"
@@ -72,9 +68,6 @@ type Lightning struct {
 	serverAddr net.Addr
 	serverLock sync.Mutex
 	status     restore.LightningStatus
-
-	promFactory  promutil.Factory
-	promRegistry promutil.Registry
 
 	cancelLock sync.Mutex
 	curTask    *config.Config
@@ -101,16 +94,12 @@ func New(globalCfg *config.GlobalConfig) *Lightning {
 
 	redact.InitRedact(globalCfg.Security.RedactInfoLog)
 
-	promFactory := promutil.NewDefaultFactory()
-	promRegistry := promutil.NewDefaultRegistry()
 	ctx, shutdown := context.WithCancel(context.Background())
 	return &Lightning{
-		globalCfg:    globalCfg,
-		globalTLS:    tls,
-		ctx:          ctx,
-		shutdown:     shutdown,
-		promFactory:  promFactory,
-		promRegistry: promRegistry,
+		globalCfg: globalCfg,
+		globalTLS: tls,
+		ctx:       ctx,
+		shutdown:  shutdown,
 	}
 }
 
@@ -192,30 +181,13 @@ func httpHandleWrapper(h http.HandlerFunc) http.HandlerFunc {
 func (l *Lightning) goServe(statusAddr string, realAddrWriter io.Writer) error {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.RedirectHandler("/web/", http.StatusFound))
-
-	registry := l.promRegistry
-	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
-	registry.MustRegister(collectors.NewGoCollector())
-	if gatherer, ok := registry.(prometheus.Gatherer); ok {
-		handler := promhttp.InstrumentMetricHandler(
-			registry, promhttp.HandlerFor(gatherer, promhttp.HandlerOpts{}),
-		)
-		mux.Handle("/metrics", handler)
-	}
+	mux.Handle("/metrics", promhttp.Handler())
 
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-
-	// Enable failpoint http API for testing.
-	failpoint.Inject("EnableTestAPI", func() {
-		mux.HandleFunc("/fail/", func(w http.ResponseWriter, r *http.Request) {
-			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/fail")
-			new(failpoint.HttpHandler).ServeHTTP(w, r)
-		})
-	})
 
 	handleTasks := http.StripPrefix("/tasks", http.HandlerFunc(l.handleTask))
 	mux.Handle("/tasks", httpHandleWrapper(handleTasks.ServeHTTP))
@@ -270,13 +242,8 @@ func (l *Lightning) RunOnce(taskCtx context.Context, taskCfg *config.Config, glu
 	failpoint.Inject("SetTaskID", func(val failpoint.Value) {
 		taskCfg.TaskID = int64(val.(int))
 	})
-	o := &options{
-		glue:         glue,
-		promFactory:  l.promFactory,
-		promRegistry: l.promRegistry,
-		logger:       log.L(),
-	}
-	return l.run(taskCtx, taskCfg, o)
+
+	return l.run(taskCtx, taskCfg, &options{glue: glue})
 }
 
 func (l *Lightning) RunServer() error {
@@ -293,11 +260,7 @@ func (l *Lightning) RunServer() error {
 		if err != nil {
 			return err
 		}
-		o := &options{
-			promFactory:  l.promFactory,
-			promRegistry: l.promRegistry,
-			logger:       log.L(),
-		}
+		o := &options{}
 		err = l.run(context.Background(), task, o)
 		if err != nil && !common.IsContextCanceledError(err) {
 			restore.DeliverPauser.Pause() // force pause the progress on error
@@ -317,11 +280,7 @@ func (l *Lightning) RunServer() error {
 //   - WithCheckpointStorage: caller has opened an external storage for lightning and want to save checkpoint
 //     in it. Otherwise, lightning will save checkpoint by the Checkpoint.DSN in config
 func (l *Lightning) RunOnceWithOptions(taskCtx context.Context, taskCfg *config.Config, opts ...Option) error {
-	o := &options{
-		promFactory:  l.promFactory,
-		promRegistry: l.promRegistry,
-		logger:       log.L(),
-	}
+	o := &options{}
 	for _, opt := range opts {
 		opt(o)
 	}
@@ -368,19 +327,11 @@ var (
 
 func (l *Lightning) run(taskCtx context.Context, taskCfg *config.Config, o *options) (err error) {
 	build.LogInfo(build.Lightning)
-	o.logger.Info("cfg", zap.Stringer("cfg", taskCfg))
+	log.L().Info("cfg", zap.Stringer("cfg", taskCfg))
 
 	utils.LogEnvVariables()
 
-	metrics := metric.NewMetrics(o.promFactory)
-	metrics.RegisterTo(o.promRegistry)
-	defer func() {
-		metrics.UnregisterFrom(o.promRegistry)
-	}()
-
-	ctx := metric.NewContext(taskCtx, metrics)
-	ctx = log.NewContext(ctx, o.logger)
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(taskCtx)
 	l.cancelLock.Lock()
 	l.cancel = cancel
 	l.curTask = taskCfg
@@ -469,7 +420,7 @@ func (l *Lightning) run(taskCtx context.Context, taskCfg *config.Config, o *opti
 		return common.NormalizeOrWrapErr(common.ErrStorageUnknown, walkErr)
 	}
 
-	loadTask := o.logger.Begin(zap.InfoLevel, "load data source")
+	loadTask := log.L().Begin(zap.InfoLevel, "load data source")
 	var mdl *mydump.MDLoader
 	mdl, err = mydump.NewMyDumpLoaderWithStore(ctx, taskCfg, s)
 	loadTask.End(zap.ErrorLevel, err)
@@ -478,13 +429,13 @@ func (l *Lightning) run(taskCtx context.Context, taskCfg *config.Config, o *opti
 	}
 	err = checkSystemRequirement(taskCfg, mdl.GetDatabases())
 	if err != nil {
-		o.logger.Error("check system requirements failed", zap.Error(err))
+		log.L().Error("check system requirements failed", zap.Error(err))
 		return common.ErrSystemRequirementNotMet.Wrap(err).GenWithStackByArgs()
 	}
 	// check table schema conflicts
 	err = checkSchemaConflict(taskCfg, mdl.GetDatabases())
 	if err != nil {
-		o.logger.Error("checkpoint schema conflicts with data files", zap.Error(err))
+		log.L().Error("checkpoint schema conflicts with data files", zap.Error(err))
 		return errors.Trace(err)
 	}
 
@@ -505,7 +456,7 @@ func (l *Lightning) run(taskCtx context.Context, taskCfg *config.Config, o *opti
 
 	procedure, err = restore.NewRestoreController(ctx, taskCfg, param)
 	if err != nil {
-		o.logger.Error("restore failed", log.ShortError(err))
+		log.L().Error("restore failed", log.ShortError(err))
 		return errors.Trace(err)
 	}
 	defer procedure.Close()
@@ -847,9 +798,7 @@ func handleLogLevel(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		oldLevel := log.SetLevel(zapcore.InfoLevel)
-		log.L().Info("changed log level. No effects if task has specified its logger",
-			zap.Stringer("old", oldLevel),
-			zap.Stringer("new", logLevel.Level))
+		log.L().Info("changed log level", zap.Stringer("old", oldLevel), zap.Stringer("new", logLevel.Level))
 		log.SetLevel(logLevel.Level)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("{}"))
@@ -955,7 +904,7 @@ func CleanupMetas(ctx context.Context, cfg *config.Config, tableName string) err
 	if err != nil || !exist {
 		return errors.Trace(err)
 	}
-	return errors.Trace(restore.MaybeCleanupAllMetas(ctx, log.L(), db, cfg.App.MetaSchemaName, tableMetaExist))
+	return errors.Trace(restore.MaybeCleanupAllMetas(ctx, db, cfg.App.MetaSchemaName, tableMetaExist))
 }
 
 func SwitchMode(ctx context.Context, cfg *config.Config, tls *common.TLS, mode string) error {

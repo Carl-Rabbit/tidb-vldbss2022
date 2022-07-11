@@ -128,8 +128,12 @@ func TypeToStr(tp byte, cs string) (r string) {
 // Args:
 // 	ts: type string
 func StrToType(ts string) (tp byte) {
-	ts = strings.Replace(ts, "blob", "text", 1)
-	ts = strings.Replace(ts, "binary", "char", 1)
+	if strings.Contains(ts, "blob") {
+		ts = strings.Replace(ts, "blob", "text", 1)
+	} else if strings.Contains(ts, "binary") {
+		ts = strings.Replace(ts, "binary", "char", 1)
+	}
+
 	if tp, ok := str2Type[ts]; ok {
 		return tp
 	}

@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/tidb/expression"
-	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/parser/ast"
 	"github.com/pingcap/tidb/parser/mysql"
 	"github.com/pingcap/tidb/types"
@@ -66,8 +65,7 @@ func TestAggFunc2Pb(t *testing.T) {
 			aggFunc, err := NewAggFuncDesc(ctx, funcName, args, hasDistinct)
 			require.NoError(t, err)
 			aggFunc.RetTp = funcTypes[i]
-			pbExpr, err := AggFuncToPBExpr(ctx, client, aggFunc, kv.UnSpecified)
-			require.NoError(t, err)
+			pbExpr := AggFuncToPBExpr(ctx, client, aggFunc)
 			js, err := json.Marshal(pbExpr)
 			require.NoError(t, err)
 			require.Equal(t, fmt.Sprintf(jsons[i], hasDistinct), string(js))

@@ -3,9 +3,6 @@
 package errors
 
 import (
-	"context"
-	stderrors "errors"
-
 	"github.com/pingcap/errors"
 )
 
@@ -16,17 +13,6 @@ func Is(err error, is *errors.Error) bool {
 		return ok && normalizedErr.ID() == is.ID()
 	})
 	return errorFound != nil
-}
-
-// IsContextCanceled checks whether the is caused by context.Canceled.
-// errors.Cause does not work for the error wrapped by %w in fmt.Errorf.
-// So we need to call stderrors.Is to unwrap the error.
-func IsContextCanceled(err error) bool {
-	err = errors.Cause(err)
-	if err == context.Canceled || err == context.DeadlineExceeded {
-		return true
-	}
-	return stderrors.Is(err, context.Canceled) || stderrors.Is(err, context.DeadlineExceeded)
 }
 
 // BR errors.

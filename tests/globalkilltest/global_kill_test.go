@@ -49,10 +49,7 @@ var (
 
 	pdClientPath = flag.String("pd", "127.0.0.1:2379", "pd client path")
 
-	// nolint: unused, deadcode
-	lostConnectionToPDTimeout = flag.Int("conn_lost", 5, "lost connection to PD timeout, should be the same as TiDB ldflag <ldflagLostConnectionToPDTimeout>")
-
-	// nolint: unused, deadcode
+	lostConnectionToPDTimeout       = flag.Int("conn_lost", 5, "lost connection to PD timeout, should be the same as TiDB ldflag <ldflagLostConnectionToPDTimeout>")
 	timeToCheckPDConnectionRestored = flag.Int("conn_restored", 1, "time to check PD connection restored, should be the same as TiDB ldflag <ldflagServerIDTimeToCheckPDConnectionRestored>")
 )
 
@@ -67,7 +64,7 @@ type GlobalKillSuite struct {
 	pdCli *clientv3.Client
 	pdErr error
 
-	clusterID string
+	clusterId string
 	pdProc    *exec.Cmd
 	tikvProc  *exec.Cmd
 }
@@ -77,7 +74,7 @@ func createGloabalKillSuite(t *testing.T) (s *GlobalKillSuite, clean func()) {
 	err := logutil.InitLogger(&logutil.LogConfig{Config: log.Config{Level: *logLevel}})
 	require.NoError(t, err)
 
-	s.clusterID = time.Now().Format(time.RFC3339Nano)
+	s.clusterId = time.Now().Format(time.RFC3339Nano)
 	err = s.startCluster()
 	require.NoError(t, err)
 	s.pdCli, s.pdErr = s.connectPD()
@@ -160,12 +157,12 @@ func (s *GlobalKillSuite) startPD(dataDir string) (err error) {
 }
 
 func (s *GlobalKillSuite) startCluster() (err error) {
-	err = s.startPD(s.clusterID)
+	err = s.startPD(s.clusterId)
 	if err != nil {
 		return
 	}
 
-	err = s.startTiKV(s.clusterID)
+	err = s.startTiKV(s.clusterId)
 	if err != nil {
 		return
 	}
@@ -376,11 +373,12 @@ func sleepRoutine(ctx context.Context, sleepTime int, conn *sql.Conn, connID uin
 		return
 	}
 	rows.Next()
-	if err := rows.Err(); err != nil {
-		ch <- sleepResult{err: err}
+	if rows.Err() != nil {
+		ch <- sleepResult{err: rows.Err()}
 		return
 	}
-	if err = rows.Close(); err != nil {
+	err = rows.Close()
+	if err != nil {
 		ch <- sleepResult{err: err}
 	}
 

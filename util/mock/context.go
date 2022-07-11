@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/tidb/parser/model"
 	"github.com/pingcap/tidb/parser/terror"
 	"github.com/pingcap/tidb/sessionctx"
-	"github.com/pingcap/tidb/sessionctx/sessionstates"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/util"
 	"github.com/pingcap/tidb/util/disk"
@@ -37,7 +36,7 @@ import (
 	"github.com/pingcap/tidb/util/sqlexec"
 	"github.com/pingcap/tidb/util/topsql/stmtstats"
 	"github.com/pingcap/tipb/go-binlog"
-	"github.com/tikv/client-go/v2/oracle"
+	"github.com/tikv/client-go/v2/tikv"
 )
 
 var (
@@ -55,16 +54,10 @@ type Context struct {
 	cancel      context.CancelFunc
 	sm          util.SessionManager
 	pcache      *kvcache.SimpleLRUCache
-	level       kvrpcpb.DiskFullOpt
-	is          sessionctx.InfoschemaMetaVersion
 }
 
 type wrapTxn struct {
 	kv.Transaction
-}
-
-func (txn *wrapTxn) Wait(_ context.Context, _ sessionctx.Context) (kv.Transaction, error) {
-	return txn, nil
 }
 
 func (txn *wrapTxn) Valid() bool {
@@ -97,12 +90,12 @@ func (c *Context) ExecuteStmt(ctx context.Context, stmtNode ast.StmtNode) (sqlex
 
 // SetDiskFullOpt sets allowed options of current operation in each TiKV disk usage level.
 func (c *Context) SetDiskFullOpt(level kvrpcpb.DiskFullOpt) {
-	c.level = level
+	c.txn.Transaction.SetDiskFullOpt(kvrpcpb.DiskFullOpt_AllowedOnAlmostFull)
 }
 
 // ClearDiskFullOpt clears allowed options of current operation in each TiKV disk usage level.
 func (c *Context) ClearDiskFullOpt() {
-	c.level = kvrpcpb.DiskFullOpt_NotAllowedOnFull
+	c.txn.Transaction.ClearDiskFullOpt()
 }
 
 // ExecuteInternal implements sqlexec.SQLExecutor ExecuteInternal interface.
@@ -178,21 +171,7 @@ func (c *Context) GetInfoSchema() sessionctx.InfoschemaMetaVersion {
 			return is
 		}
 	}
-	if c.is == nil {
-		c.is = MockInfoschema(nil)
-	}
-	return c.is
-}
-
-// MockInfoschema only serves for test.
-var MockInfoschema func(tbList []*model.TableInfo) sessionctx.InfoschemaMetaVersion
-
-// GetDomainInfoSchema returns the latest information schema in domain
-func (c *Context) GetDomainInfoSchema() sessionctx.InfoschemaMetaVersion {
-	if c.is == nil {
-		c.is = MockInfoschema(nil)
-	}
-	return c.is
+	return nil
 }
 
 // GetBuiltinFunctionUsage implements sessionctx.Context GetBuiltinFunctionUsage interface.
@@ -280,9 +259,23 @@ func (c *Context) RollbackTxn(ctx context.Context) {
 // CommitTxn indicates an expected call of CommitTxn.
 func (c *Context) CommitTxn(ctx context.Context) error {
 	defer c.sessionVars.SetInTxn(false)
-	c.txn.SetDiskFullOpt(c.level)
 	if c.txn.Valid() {
 		return c.txn.Commit(ctx)
+	}
+	return nil
+}
+
+// InitTxnWithStartTS implements the sessionctx.Context interface with startTS.
+func (c *Context) InitTxnWithStartTS(startTS uint64) error {
+	if c.txn.Valid() {
+		return nil
+	}
+	if c.Store != nil {
+		txn, err := c.Store.Begin(tikv.WithTxnScope(kv.GlobalTxnScope), tikv.WithStartTS(startTS))
+		if err != nil {
+			return errors.Trace(err)
+		}
+		c.txn.Transaction = txn
 	}
 	return nil
 }
@@ -370,13 +363,7 @@ func (c *Context) HasLockedTables() bool {
 }
 
 // PrepareTSFuture implements the sessionctx.Context interface.
-func (c *Context) PrepareTSFuture(ctx context.Context, future oracle.Future, scope string) error {
-	return nil
-}
-
-// GetPreparedTxnFuture returns the prepared ts future
-func (c *Context) GetPreparedTxnFuture() sessionctx.TxnFuture {
-	return &c.txn
+func (c *Context) PrepareTSFuture(ctx context.Context) {
 }
 
 // GetStmtStats implements the sessionctx.Context interface.
@@ -397,16 +384,6 @@ func (c *Context) ReleaseAdvisoryLock(lockName string) bool {
 // ReleaseAllAdvisoryLocks releases all advisory locks
 func (c *Context) ReleaseAllAdvisoryLocks() int {
 	return 0
-}
-
-// EncodeSessionStates implements sessionctx.Context EncodeSessionStates interface.
-func (c *Context) EncodeSessionStates(context.Context, sessionctx.Context, *sessionstates.SessionStates) error {
-	return errors.Errorf("Not Supported")
-}
-
-// DecodeSessionStates implements sessionctx.Context DecodeSessionStates interface.
-func (c *Context) DecodeSessionStates(context.Context, sessionctx.Context, *sessionstates.SessionStates) error {
-	return errors.Errorf("Not Supported")
 }
 
 // Close implements the sessionctx.Context interface.

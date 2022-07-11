@@ -78,7 +78,7 @@ func (i ReservoirRowSampleItem) MemUsage() (sum int64) {
 		sum += col.MemUsage()
 	}
 	if i.Handle != nil {
-		sum += int64(i.Handle.MemUsage())
+		sum += i.Handle.MemUsage()
 	}
 	return sum
 }

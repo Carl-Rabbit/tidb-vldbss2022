@@ -28,7 +28,7 @@ func TestMockConn(t *testing.T) {
 	defer clean()
 	server := CreateMockServer(t, store)
 	defer server.Close()
-	conn := CreateMockConn(t, server)
+	conn := CreateMockConn(t, store, server)
 	defer conn.Close()
 
 	require.NoError(t, conn.HandleQuery(context.Background(), "select 1"))

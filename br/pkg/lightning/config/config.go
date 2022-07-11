@@ -532,7 +532,6 @@ type TikvImporter struct {
 
 	EngineMemCacheSize      ByteSize `toml:"engine-mem-cache-size" json:"engine-mem-cache-size"`
 	LocalWriterMemCacheSize ByteSize `toml:"local-writer-mem-cache-size" json:"local-writer-mem-cache-size"`
-	StoreWriteBWLimit       ByteSize `toml:"store-write-bwlimit" json:"store-write-bwlimit"`
 }
 
 type Checkpoint struct {
@@ -1156,7 +1155,7 @@ func (cfg *Config) CheckAndAdjustSecurity() error {
 			return common.ErrInvalidConfig.GenWithStack("cannot set `tidb.tls` to 'cluster' without a [security] section")
 		}
 	case "false", "skip-verify", "preferred":
-		return nil
+		break
 	default:
 		return common.ErrInvalidConfig.GenWithStack("unsupported `tidb.tls` config %s", cfg.TiDB.TLS)
 	}

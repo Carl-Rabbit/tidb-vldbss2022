@@ -460,7 +460,6 @@ func TestNewCostInterfaceRandGen(t *testing.T) {
 
 	tk.MustExec("use test")
 	tk.MustExec(`create table t (a int primary key, b int, c int, d int, k int, key b(b), key cd(c, d), unique key(k))`)
-	tk.MustExec(`set @@tidb_enable_paging = off`)
 
 	queries := []string{
 		`SELECT a FROM t WHERE a is null AND d in (5307, 15677, 57970)`,
@@ -949,21 +948,39 @@ func TestTrueCardCost(t *testing.T) {
 	tk.MustExec("use test")
 	tk.MustExec(`create table t (a int primary key, b int, key(b))`)
 
-	checkPlanCost := func(sql string) {
+	checkPlanCost := func(sql string, expected, expectedTrueCard []string) {
 		tk.MustExec(`set @@tidb_enable_new_cost_interface=0`)
 		rs := tk.MustQuery(`explain analyze format=verbose ` + sql).Rows()
-		planCost1 := rs[0][2].(string)
+		var tmp []string
+		for _, r := range rs {
+			prefix := strings.Join([]string{r[0].(string), r[1].(string), r[2].(string), r[3].(string), r[4].(string)}, " ") // op, est_rows, cost, act_rows, task
+			tmp = append(tmp, prefix)
+		}
+		require.Equal(t, tmp, expected)
 
 		tk.MustExec(`set @@tidb_enable_new_cost_interface=1`)
 		rs = tk.MustQuery(`explain analyze format=true_card_cost ` + sql).Rows()
-		planCost2 := rs[0][2].(string)
-
-		// `true_card_cost` can work since the plan cost is changed
-		require.NotEqual(t, planCost1, planCost2)
+		tmp = tmp[:0]
+		for _, r := range rs {
+			prefix := strings.Join([]string{r[0].(string), r[1].(string), r[2].(string), r[3].(string), r[4].(string)}, " ") // op, est_rows, cost, act_rows, task
+			tmp = append(tmp, prefix)
+		}
+		require.Equal(t, tmp, expectedTrueCard)
 	}
 
-	checkPlanCost(`select * from t`)
-	checkPlanCost(`select * from t where a>10`)
-	checkPlanCost(`select * from t where a>10 limit 10`)
-	checkPlanCost(`select sum(a), b*2 from t use index(b) group by b order by sum(a) limit 10`)
+	checkPlanCost(`select sum(a), b*2 from t use index(b) group by b order by sum(a) limit 10`,
+		[]string{"Projection_8 10.00 133771.82 0 root",
+			"└─Projection_9 10.00 133747.82 0 root",
+			"  └─TopN_12 10.00 133723.82 0 root",
+			"    └─HashAgg_23 8000.00 53997.53 0 root",
+			"      └─IndexReader_24 8000.00 48668.53 0 root",
+			"        └─HashAgg_17 8000.00 0.00 0 cop[tikv]",
+			"          └─IndexFullScan_22 10000.00 570000.00 0 cop[tikv]"},
+		[]string{"Projection_8 10.00 70.34 0 root",
+			"└─Projection_9 10.00 52.34 0 root",
+			"  └─TopN_12 10.00 34.34 0 root",
+			"    └─HashAgg_23 8000.00 34.33 0 root",
+			"      └─IndexReader_24 8000.00 1.33 0 root",
+			"        └─HashAgg_17 8000.00 0.00 0 cop[tikv]",
+			"          └─IndexFullScan_22 10000.00 0.00 0 cop[tikv]"})
 }

@@ -38,9 +38,8 @@ type TestClient struct {
 	injectInScatter     func(*restore.RegionInfo) error
 	supportBatchScatter bool
 
-	scattered   map[uint64]bool
-	InjectErr   bool
-	InjectTimes int32
+	scattered map[uint64]bool
+	InjectErr bool
 }
 
 func NewTestClient(
@@ -217,9 +216,8 @@ func (c *TestClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.Ge
 }
 
 func (c *TestClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int) ([]*restore.RegionInfo, error) {
-	if c.InjectErr && c.InjectTimes > 0 {
-		c.InjectTimes -= 1
-		return nil, status.Error(codes.Unavailable, "not leader")
+	if c.InjectErr {
+		return nil, errors.New("mock scan error")
 	}
 
 	infos := c.regionsInfo.ScanRange(key, endKey, limit)

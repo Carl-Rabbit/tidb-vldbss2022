@@ -146,7 +146,8 @@ func RunRestoreRaw(c context.Context, g glue.Glue, cmdName string, cfg *RestoreR
 		!cfg.LogProgress)
 
 	// RawKV restore does not need to rewrite keys.
-	err = restore.SplitRanges(ctx, client, ranges, nil, updateCh, true)
+	rewrite := &restore.RewriteRules{}
+	err = restore.SplitRanges(ctx, client, ranges, rewrite, updateCh, true)
 	if err != nil {
 		return errors.Trace(err)
 	}

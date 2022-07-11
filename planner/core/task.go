@@ -266,7 +266,7 @@ func (p *PhysicalIndexMergeJoin) attach2Task(tasks ...task) task {
 	}
 	t := &rootTask{
 		p:   p,
-		cst: p.GetCost(outerTask.count(), innerTask.count(), outerTask.cost(), innerTask.cost(), 0),
+		cst: p.GetCost(outerTask.count(), innerTask.count(), outerTask.cost(), innerTask.cost()),
 	}
 	p.cost = t.cost()
 	return t
@@ -282,7 +282,7 @@ func (p *PhysicalIndexHashJoin) attach2Task(tasks ...task) task {
 	}
 	t := &rootTask{
 		p:   p,
-		cst: p.GetCost(outerTask.count(), innerTask.count(), outerTask.cost(), innerTask.cost(), 0),
+		cst: p.GetCost(outerTask.count(), innerTask.count(), outerTask.cost(), innerTask.cost()),
 	}
 	p.cost = t.cost()
 	return t
@@ -298,14 +298,14 @@ func (p *PhysicalIndexJoin) attach2Task(tasks ...task) task {
 	}
 	t := &rootTask{
 		p:   p,
-		cst: p.GetCost(outerTask.count(), innerTask.count(), outerTask.cost(), innerTask.cost(), 0),
+		cst: p.GetCost(outerTask.count(), innerTask.count(), outerTask.cost(), innerTask.cost()),
 	}
 	p.cost = t.cost()
 	return t
 }
 
 func getAvgRowSize(stats *property.StatsInfo, schema *expression.Schema) (size float64) {
-	if stats.HistColl != nil {
+	if stats != nil && stats.HistColl != nil {
 		size = stats.HistColl.GetAvgRowSizeListInDisk(schema.Columns)
 	} else {
 		// Estimate using just the type info.
@@ -326,7 +326,7 @@ func (p *PhysicalHashJoin) attach2Task(tasks ...task) task {
 	p.SetChildren(lTask.plan(), rTask.plan())
 	task := &rootTask{
 		p:   p,
-		cst: lTask.cost() + rTask.cost() + p.GetCost(lTask.count(), rTask.count(), false, 0),
+		cst: lTask.cost() + rTask.cost() + p.GetCost(lTask.count(), rTask.count()),
 	}
 	p.cost = task.cost()
 	return task
@@ -379,8 +379,9 @@ func negotiateCommonType(lType, rType *types.FieldType) (*types.FieldType, bool,
 		}
 		lLen, rLen := lType.GetFlen()+lExtend, rType.GetFlen()+rExtend
 		cLen := mathutil.Max(lLen, rLen)
-		commonType.SetDecimalUnderLimit(cDec)
-		commonType.SetFlenUnderLimit(cLen)
+		cLen = mathutil.Min(65, cLen)
+		commonType.SetDecimal(cDec)
+		commonType.SetFlen(cLen)
 	} else if needConvert(lType, commonType) || needConvert(rType, commonType) {
 		if mysql.IsIntegerType(commonType.GetType()) {
 			// If the target type is int, both TiFlash and Mysql only support cast to Int64
@@ -547,7 +548,7 @@ func (p *PhysicalHashJoin) attach2TaskForMpp(tasks ...task) task {
 		outerTask = rTask
 	}
 	task := &mppTask{
-		cst:      lCost + rCost + p.GetCost(lTask.count(), rTask.count(), false, 0),
+		cst:      lCost + rCost + p.GetCost(lTask.count(), rTask.count()),
 		p:        p,
 		partTp:   outerTask.partTp,
 		hashCols: outerTask.hashCols,
@@ -578,7 +579,7 @@ func (p *PhysicalHashJoin) attach2TaskForTiFlash(tasks ...task) task {
 		tblColHists:       rTask.tblColHists,
 		indexPlanFinished: true,
 		tablePlan:         p,
-		cst:               lCost + rCost + p.GetCost(lTask.count(), rTask.count(), false, 0),
+		cst:               lCost + rCost + p.GetCost(lTask.count(), rTask.count()),
 	}
 	p.cost = task.cst
 	return task
@@ -590,7 +591,7 @@ func (p *PhysicalMergeJoin) attach2Task(tasks ...task) task {
 	p.SetChildren(lTask.plan(), rTask.plan())
 	t := &rootTask{
 		p:   p,
-		cst: lTask.cost() + rTask.cost() + p.GetCost(lTask.count(), rTask.count(), 0),
+		cst: lTask.cost() + rTask.cost() + p.GetCost(lTask.count(), rTask.count()),
 	}
 	p.cost = t.cost()
 	return t
@@ -662,7 +663,7 @@ func calcPagingCost(ctx sessionctx.Context, indexPlan PhysicalPlan, expectCnt ui
 	if sourceRows > indexRows {
 		indexSelectivity = indexRows / sourceRows
 	}
-	pagingCst := seekCnt*sessVars.GetSeekFactor(nil) + float64(expectCnt)*sessVars.GetCPUFactor()
+	pagingCst := seekCnt*sessVars.GetSeekFactor(nil) + float64(expectCnt)*sessVars.CPUFactor
 	pagingCst *= indexSelectivity
 
 	// we want the diff between idxCst and pagingCst here,
@@ -1108,7 +1109,7 @@ func (p *PhysicalUnionAll) attach2Task(tasks ...task) task {
 	p.SetChildren(childPlans...)
 	sessVars := p.ctx.GetSessionVars()
 	// Children of UnionExec are executed in parallel.
-	t.cst = childMaxCost + float64(1+len(tasks))*sessVars.GetConcurrencyFactor()
+	t.cst = childMaxCost + float64(1+len(tasks))*sessVars.ConcurrencyFactor
 	p.cost = t.cost()
 	return t
 }
@@ -1118,13 +1119,13 @@ func (sel *PhysicalSelection) attach2Task(tasks ...task) task {
 	if mppTask, _ := tasks[0].(*mppTask); mppTask != nil { // always push to mpp task.
 		sc := sel.ctx.GetSessionVars().StmtCtx
 		if expression.CanExprsPushDown(sc, sel.Conditions, sel.ctx.GetClient(), kv.TiFlash) {
-			mppTask.addCost(mppTask.count() * sessVars.GetCPUFactor())
+			mppTask.addCost(mppTask.count() * sessVars.CPUFactor)
 			sel.cost = mppTask.cost()
 			return attachPlan2Task(sel, mppTask.copy())
 		}
 	}
 	t := tasks[0].convertToRootTask(sel.ctx)
-	t.addCost(t.count() * sessVars.GetCPUFactor())
+	t.addCost(t.count() * sessVars.CPUFactor)
 	sel.cost = t.cost()
 	return attachPlan2Task(sel, t)
 }
@@ -1165,7 +1166,7 @@ func CheckAggCanPushCop(sctx sessionctx.Context, aggFuncs []*aggregation.AggFunc
 				break
 			}
 		}
-		pb, _ := aggregation.AggFuncToPBExpr(sctx, client, aggFunc, storeType)
+		pb := aggregation.AggFuncToPBExpr(sctx, client, aggFunc)
 		if pb == nil {
 			reason = "AggFunc `" + aggFunc.Name + "` can not be converted to pb expr"
 			ret = false
@@ -1337,15 +1338,7 @@ func BuildFinalModeAggregation(
 
 			finalAggFunc.OrderByItems = byItems
 			finalAggFunc.HasDistinct = aggFunc.HasDistinct
-			// In logical optimize phase, the Agg->PartitionUnion->TableReader may become
-			// Agg1->PartitionUnion->Agg2->TableReader, and the Agg2 is a partial aggregation.
-			// So in the push down here, we need to add a new if-condition check:
-			// If the original agg mode is partial already, the finalAggFunc's mode become Partial2.
-			if aggFunc.Mode == aggregation.CompleteMode {
-				finalAggFunc.Mode = aggregation.CompleteMode
-			} else if aggFunc.Mode == aggregation.Partial1Mode || aggFunc.Mode == aggregation.Partial2Mode {
-				finalAggFunc.Mode = aggregation.Partial2Mode
-			}
+			finalAggFunc.Mode = aggregation.CompleteMode
 		} else {
 			if aggFunc.Name == ast.AggFuncGroupConcat && len(aggFunc.OrderByItems) > 0 {
 				// group_concat can only run in one phase if it has order by items but without distinct property
@@ -1425,15 +1418,7 @@ func BuildFinalModeAggregation(
 				}
 			}
 
-			// In logical optimize phase, the Agg->PartitionUnion->TableReader may become
-			// Agg1->PartitionUnion->Agg2->TableReader, and the Agg2 is a partial aggregation.
-			// So in the push down here, we need to add a new if-condition check:
-			// If the original agg mode is partial already, the finalAggFunc's mode become Partial2.
-			if aggFunc.Mode == aggregation.CompleteMode {
-				finalAggFunc.Mode = aggregation.FinalMode
-			} else if aggFunc.Mode == aggregation.Partial1Mode || aggFunc.Mode == aggregation.Partial2Mode {
-				finalAggFunc.Mode = aggregation.Partial2Mode
-			}
+			finalAggFunc.Mode = aggregation.FinalMode
 		}
 
 		finalAggFunc.Args = args
@@ -1499,7 +1484,7 @@ func (p *basePhysicalAgg) convertAvgForMPP() *PhysicalProjection {
 	}
 	// no avgs
 	// for final agg, always add project due to in-compatibility between TiDB and TiFlash
-	if len(p.schema.Columns) == len(newSchema.Columns) && !p.IsFinalAgg() {
+	if len(p.schema.Columns) == len(newSchema.Columns) && !p.isFinalAgg() {
 		return nil
 	}
 	// add remaining columns to exprs
@@ -1681,7 +1666,7 @@ func (p *PhysicalStreamAgg) attach2Task(tasks ...task) task {
 					partialAgg.SetChildren(cop.indexPlan)
 					cop.indexPlan = partialAgg
 				}
-				cop.addCost(partialAgg.(*PhysicalStreamAgg).GetCost(inputRows, false, false, 0))
+				cop.addCost(partialAgg.(*PhysicalStreamAgg).GetCost(inputRows, false, 0))
 				partialAgg.SetCost(cop.cost())
 			}
 			t = cop.convertToRootTask(p.ctx)
@@ -1694,7 +1679,7 @@ func (p *PhysicalStreamAgg) attach2Task(tasks ...task) task {
 	} else {
 		attachPlan2Task(p, t)
 	}
-	t.addCost(final.GetCost(inputRows, true, false, 0))
+	t.addCost(final.GetCost(inputRows, true, 0))
 	t.plan().SetCost(t.cost())
 	return t
 }

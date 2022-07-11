@@ -33,7 +33,6 @@ import (
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
@@ -500,11 +499,6 @@ func (c *pdClient) GetOperator(ctx context.Context, regionID uint64) (*pdpb.GetO
 }
 
 func (c *pdClient) ScanRegions(ctx context.Context, key, endKey []byte, limit int) ([]*RegionInfo, error) {
-	failpoint.Inject("no-leader-error", func(_ failpoint.Value) {
-		logutil.CL(ctx).Debug("failpoint no-leader-error injected.")
-		failpoint.Return(nil, status.Error(codes.Unavailable, "not leader"))
-	})
-
 	regions, err := c.client.ScanRegions(ctx, key, endKey, limit)
 	if err != nil {
 		return nil, errors.Trace(err)

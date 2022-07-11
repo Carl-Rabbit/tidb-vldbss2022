@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/pingcap/tidb/infoschema"
+	"github.com/pingcap/tidb/infoschema/perfschema"
 	"github.com/pingcap/tidb/parser/auth"
 	"github.com/pingcap/tidb/parser/mysql"
 	"github.com/pingcap/tidb/privilege"
@@ -135,18 +136,29 @@ func (p *UserPrivileges) RequestVerification(activeRoles []*auth.RoleIdentity, d
 		}
 	}
 
-	if util.IsMemDB(dbLowerName) {
+	switch dbLowerName {
+	case util.InformationSchemaName.L:
 		switch priv {
 		case mysql.CreatePriv, mysql.AlterPriv, mysql.DropPriv, mysql.IndexPriv, mysql.CreateViewPriv,
-			mysql.InsertPriv, mysql.UpdatePriv, mysql.DeletePriv, mysql.ReferencesPriv, mysql.ExecutePriv,
-			mysql.ShowViewPriv, mysql.LockTablesPriv:
+			mysql.InsertPriv, mysql.UpdatePriv, mysql.DeletePriv:
 			return false
 		}
-		if dbLowerName == util.InformationSchemaName.L {
-			return true
-		} else if dbLowerName == util.MetricSchemaName.L {
+		return true
+	// We should be very careful of limiting privileges, so ignore `mysql` for now.
+	case util.PerformanceSchemaName.L:
+		if perfschema.IsPredefinedTable(table) {
+			switch priv {
+			case mysql.CreatePriv, mysql.AlterPriv, mysql.DropPriv, mysql.IndexPriv, mysql.InsertPriv, mysql.UpdatePriv, mysql.DeletePriv:
+				return false
+			}
+		}
+	case util.MetricSchemaName.L:
+		if infoschema.IsMetricTable(table) {
+			switch priv {
+			case mysql.CreatePriv, mysql.AlterPriv, mysql.DropPriv, mysql.IndexPriv, mysql.InsertPriv, mysql.UpdatePriv, mysql.DeletePriv:
+				return false
 			// PROCESS is the same with SELECT for metrics_schema.
-			if priv == mysql.SelectPriv && infoschema.IsMetricTable(table) {
+			case mysql.SelectPriv:
 				priv |= mysql.ProcessPriv
 			}
 		}

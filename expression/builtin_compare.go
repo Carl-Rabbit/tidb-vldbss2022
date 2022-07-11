@@ -152,8 +152,6 @@ func (c *coalesceFunctionClass) getFunction(ctx sessionctx.Context, args []Expre
 	// Set retType to BINARY(0) if all arguments are of type NULL.
 	if resultFieldType.GetType() == mysql.TypeNull {
 		types.SetBinChsClnFlag(bf.tp)
-		resultFieldType.SetFlen(0)
-		resultFieldType.SetDecimal(0)
 	} else {
 		maxIntLen := 0
 		maxFlen := 0
@@ -162,7 +160,7 @@ func (c *coalesceFunctionClass) getFunction(ctx sessionctx.Context, args []Expre
 		// and max integer-part length in `maxIntLen`.
 		for _, argTp := range fieldTps {
 			if argTp.GetDecimal() > resultFieldType.GetDecimal() {
-				resultFieldType.SetDecimalUnderLimit(argTp.GetDecimal())
+				resultFieldType.SetDecimal(argTp.GetDecimal())
 			}
 			argIntLen := argTp.GetFlen()
 			if argTp.GetDecimal() > 0 {
@@ -183,12 +181,12 @@ func (c *coalesceFunctionClass) getFunction(ctx sessionctx.Context, args []Expre
 		// For integer, field length = maxIntLen + (1/0 for sign bit)
 		// For decimal, field length = maxIntLen + maxDecimal + (1/0 for sign bit)
 		if resultEvalType == types.ETInt || resultEvalType == types.ETDecimal {
-			resultFieldType.SetFlenUnderLimit(maxIntLen + resultFieldType.GetDecimal())
+			resultFieldType.SetFlen(maxIntLen + resultFieldType.GetDecimal())
 			if resultFieldType.GetDecimal() > 0 {
-				resultFieldType.SetFlenUnderLimit(resultFieldType.GetFlen() + 1)
+				resultFieldType.SetFlen(resultFieldType.GetFlen() + 1)
 			}
 			if !mysql.HasUnsignedFlag(resultFieldType.GetFlag()) {
-				resultFieldType.SetFlenUnderLimit(resultFieldType.GetFlen() + 1)
+				resultFieldType.SetFlen(resultFieldType.GetFlen() + 1)
 			}
 			bf.tp = resultFieldType
 		} else {
@@ -553,8 +551,8 @@ func (c *greatestFunctionClass) getFunction(ctx sessionctx.Context, args []Expre
 	}
 
 	flen, decimal := fixFlenAndDecimalForGreatestAndLeast(args)
-	sig.getRetTp().SetFlenUnderLimit(flen)
-	sig.getRetTp().SetDecimalUnderLimit(decimal)
+	sig.getRetTp().SetFlen(flen)
+	sig.getRetTp().SetDecimal(decimal)
 
 	return sig, nil
 }
@@ -865,8 +863,8 @@ func (c *leastFunctionClass) getFunction(ctx sessionctx.Context, args []Expressi
 		}
 	}
 	flen, decimal := fixFlenAndDecimalForGreatestAndLeast(args)
-	sig.getRetTp().SetFlenUnderLimit(flen)
-	sig.getRetTp().SetDecimalUnderLimit(decimal)
+	sig.getRetTp().SetFlen(flen)
+	sig.getRetTp().SetDecimal(decimal)
 	return sig, nil
 }
 
@@ -2540,21 +2538,21 @@ func (b *builtinNullEQIntSig) evalInt(row chunk.Row) (val int64, isNull bool, er
 	case isNull0 && isNull1:
 		res = 1
 	case isNull0 != isNull1:
-		return res, false, nil
+		break
 	case isUnsigned0 && isUnsigned1 && types.CompareUint64(uint64(arg0), uint64(arg1)) == 0:
 		res = 1
 	case !isUnsigned0 && !isUnsigned1 && types.CompareInt64(arg0, arg1) == 0:
 		res = 1
 	case isUnsigned0 && !isUnsigned1:
 		if arg1 < 0 {
-			return res, false, nil
+			break
 		}
 		if types.CompareInt64(arg0, arg1) == 0 {
 			res = 1
 		}
 	case !isUnsigned0 && isUnsigned1:
 		if arg0 < 0 {
-			return res, false, nil
+			break
 		}
 		if types.CompareInt64(arg0, arg1) == 0 {
 			res = 1
@@ -2587,7 +2585,7 @@ func (b *builtinNullEQRealSig) evalInt(row chunk.Row) (val int64, isNull bool, e
 	case isNull0 && isNull1:
 		res = 1
 	case isNull0 != isNull1:
-		return res, false, nil
+		break
 	case types.CompareFloat64(arg0, arg1) == 0:
 		res = 1
 	}
@@ -2618,7 +2616,7 @@ func (b *builtinNullEQDecimalSig) evalInt(row chunk.Row) (val int64, isNull bool
 	case isNull0 && isNull1:
 		res = 1
 	case isNull0 != isNull1:
-		return res, false, nil
+		break
 	case arg0.Compare(arg1) == 0:
 		res = 1
 	}
@@ -2649,7 +2647,7 @@ func (b *builtinNullEQStringSig) evalInt(row chunk.Row) (val int64, isNull bool,
 	case isNull0 && isNull1:
 		res = 1
 	case isNull0 != isNull1:
-		return res, false, nil
+		break
 	case types.CompareString(arg0, arg1, b.collation) == 0:
 		res = 1
 	}
@@ -2680,7 +2678,7 @@ func (b *builtinNullEQDurationSig) evalInt(row chunk.Row) (val int64, isNull boo
 	case isNull0 && isNull1:
 		res = 1
 	case isNull0 != isNull1:
-		return res, false, nil
+		break
 	case arg0.Compare(arg1) == 0:
 		res = 1
 	}
@@ -2711,7 +2709,7 @@ func (b *builtinNullEQTimeSig) evalInt(row chunk.Row) (val int64, isNull bool, e
 	case isNull0 && isNull1:
 		res = 1
 	case isNull0 != isNull1:
-		return res, false, nil
+		break
 	case arg0.Compare(arg1) == 0:
 		res = 1
 	}
@@ -2742,7 +2740,7 @@ func (b *builtinNullEQJSONSig) evalInt(row chunk.Row) (val int64, isNull bool, e
 	case isNull0 && isNull1:
 		res = 1
 	case isNull0 != isNull1:
-		return res, false, nil
+		break
 	default:
 		cmpRes := json.CompareBinary(arg0, arg1)
 		if cmpRes == 0 {

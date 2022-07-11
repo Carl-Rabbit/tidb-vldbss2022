@@ -2674,7 +2674,6 @@ const (
 	ShowPlacementForTable
 	ShowPlacementForPartition
 	ShowPlacementLabels
-	ShowSessionStates
 )
 
 const (
@@ -3026,8 +3025,6 @@ func (n *ShowStmt) Restore(ctx *format.RestoreCtx) error {
 			ctx.WriteKeyWord("PLACEMENT")
 		case ShowPlacementLabels:
 			ctx.WriteKeyWord("PLACEMENT LABELS")
-		case ShowSessionStates:
-			ctx.WriteKeyWord("SESSION_STATES")
 		default:
 			return errors.New("Unknown ShowStmt type")
 		}

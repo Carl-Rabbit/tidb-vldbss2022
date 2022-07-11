@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/errorpb"
 	"github.com/pingcap/kvproto/pkg/import_sstpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -18,8 +17,6 @@ import (
 	"github.com/pingcap/tidb/store/pdtypes"
 	"github.com/pingcap/tidb/util/codec"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func assertDecode(t *testing.T, key []byte) []byte {
@@ -308,11 +305,4 @@ func TestRetryBackoff(t *testing.T) {
 	// we retried leader not found error. so the next backoff should be 2 * initical backoff.
 	require.Equal(t, 2*time.Millisecond, rs.ExponentialBackoff())
 	require.NoError(t, err)
-}
-
-func TestWrappedError(t *testing.T) {
-	result := restore.RPCResultFromError(errors.Trace(status.Error(codes.Unavailable, "the server is slacking. ><=·>")))
-	require.Equal(t, result.StrategyForRetry(), restore.StrategyFromThisRegion)
-	result = restore.RPCResultFromError(errors.Trace(status.Error(codes.Unknown, "the server said something hard to understand")))
-	require.Equal(t, result.StrategyForRetry(), restore.StrategyGiveUp)
 }

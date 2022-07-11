@@ -39,19 +39,21 @@ type MDDatabaseMeta struct {
 }
 
 func (m *MDDatabaseMeta) GetSchema(ctx context.Context, store storage.ExternalStorage) string {
-	if m.SchemaFile.FileMeta.Path != "" {
-		schema, err := ExportStatement(ctx, store, m.SchemaFile, m.charSet)
-		if err != nil {
-			log.FromContext(ctx).Warn("failed to extract table schema",
-				zap.String("Path", m.SchemaFile.FileMeta.Path),
-				log.ShortError(err),
-			)
-		} else if schemaStr := strings.TrimSpace(string(schema)); schemaStr != "" {
-			return schemaStr
-		}
+	schema, err := ExportStatement(ctx, store, m.SchemaFile, m.charSet)
+	if err != nil {
+		log.L().Warn("failed to extract table schema",
+			zap.String("Path", m.SchemaFile.FileMeta.Path),
+			log.ShortError(err),
+		)
+		schema = nil
 	}
-	// set default if schema sql is empty or failed to extract.
-	return "CREATE DATABASE IF NOT EXISTS " + common.EscapeIdentifier(m.Name)
+	schemaStr := strings.TrimSpace(string(schema))
+	// set default if schema sql is empty
+	if len(schemaStr) == 0 {
+		schemaStr = "CREATE DATABASE IF NOT EXISTS " + common.EscapeIdentifier(m.Name)
+	}
+
+	return schemaStr
 }
 
 type MDTableMeta struct {
@@ -76,7 +78,7 @@ type SourceFileMeta struct {
 func (m *MDTableMeta) GetSchema(ctx context.Context, store storage.ExternalStorage) (string, error) {
 	schema, err := ExportStatement(ctx, store, m.SchemaFile, m.charSet)
 	if err != nil {
-		log.FromContext(ctx).Error("failed to extract table schema",
+		log.L().Error("failed to extract table schema",
 			zap.String("Path", m.SchemaFile.FileMeta.Path),
 			log.ShortError(err),
 		)
@@ -155,7 +157,7 @@ func NewMyDumpLoaderWithStore(ctx context.Context, cfg *config.Config, store sto
 		fileRouteRules = append(fileRouteRules, defaultFileRouteRules...)
 	}
 
-	fileRouter, err := NewFileRouter(fileRouteRules, log.FromContext(ctx))
+	fileRouter, err := NewFileRouter(fileRouteRules)
 	if err != nil {
 		return nil, common.ErrInvalidConfig.Wrap(err).GenWithStack("parse file routing rule failed")
 	}
@@ -298,7 +300,7 @@ func (s *mdLoaderSetup) listFiles(ctx context.Context, store storage.ExternalSto
 	// meaning the file and chunk orders will be the same everytime it is called
 	// (as long as the source is immutable).
 	err := store.WalkDir(ctx, &storage.WalkOption{}, func(path string, size int64) error {
-		logger := log.FromContext(ctx).With(zap.String("path", path))
+		logger := log.With(zap.String("path", path))
 
 		res, err := s.loader.fileRouter.Route(filepath.ToSlash(path))
 		if err != nil {

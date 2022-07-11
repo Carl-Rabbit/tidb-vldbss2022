@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"math"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -40,7 +40,6 @@ import (
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -110,7 +109,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 	waitTime := splitRegionBaseBackOffTime
 	skippedKeys := 0
 	for i := 0; i < splitRetryTimes; i++ {
-		log.FromContext(ctx).Info("split and scatter region",
+		log.L().Info("split and scatter region",
 			logutil.Key("minKey", minKey),
 			logutil.Key("maxKey", maxKey),
 			zap.Int("retry", i),
@@ -129,15 +128,15 @@ func (local *local) SplitAndScatterRegionByRanges(
 		}
 		var regions []*split.RegionInfo
 		regions, err = split.PaginateScanRegion(ctx, local.splitCli, minKey, maxKey, 128)
-		log.FromContext(ctx).Info("paginate scan regions", zap.Int("count", len(regions)),
+		log.L().Info("paginate scan regions", zap.Int("count", len(regions)),
 			logutil.Key("start", minKey), logutil.Key("end", maxKey))
 		if err != nil {
-			log.FromContext(ctx).Warn("paginate scan region failed", logutil.Key("minKey", minKey), logutil.Key("maxKey", maxKey),
+			log.L().Warn("paginate scan region failed", logutil.Key("minKey", minKey), logutil.Key("maxKey", maxKey),
 				log.ShortError(err), zap.Int("retry", i))
 			continue
 		}
 
-		log.FromContext(ctx).Info("paginate scan region finished", logutil.Key("minKey", minKey), logutil.Key("maxKey", maxKey),
+		log.L().Info("paginate scan region finished", logutil.Key("minKey", minKey), logutil.Key("maxKey", maxKey),
 			zap.Int("regions", len(regions)))
 
 		if !needSplit {
@@ -155,7 +154,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 				return beforeEnd(startKey, regions[i].Region.EndKey)
 			})
 			if idx < 0 || idx >= len(regions) {
-				log.FromContext(ctx).Error("target region not found", logutil.Key("start_key", startKey),
+				log.L().Error("target region not found", logutil.Key("start_key", startKey),
 					logutil.RegionBy("first_region", regions[0].Region),
 					logutil.RegionBy("last_region", regions[len(regions)-1].Region))
 				return errors.New("target region not found")
@@ -166,7 +165,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 		}
 		ranges = needSplitRanges
 		if len(ranges) == 0 {
-			log.FromContext(ctx).Info("no ranges need to be split, skipped.")
+			log.L().Info("no ranges need to be split, skipped.")
 			return nil
 		}
 
@@ -174,7 +173,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 		if tableInfo != nil {
 			tableRegionStats, err = fetchTableRegionSizeStats(ctx, db, tableInfo.ID)
 			if err != nil {
-				log.FromContext(ctx).Warn("fetch table region size statistics failed",
+				log.L().Warn("fetch table region size statistics failed",
 					zap.String("table", tableInfo.Name), zap.Error(err))
 				tableRegionStats = make(map[uint64]int64)
 			}
@@ -190,16 +189,16 @@ func (local *local) SplitAndScatterRegionByRanges(
 			firstKeyEnc := codec.EncodeBytes([]byte{}, retryKeys[0])
 			lastKeyEnc := codec.EncodeBytes([]byte{}, retryKeys[len(retryKeys)-1])
 			if bytes.Compare(firstKeyEnc, regions[0].Region.StartKey) < 0 || !beforeEnd(lastKeyEnc, regions[len(regions)-1].Region.EndKey) {
-				log.FromContext(ctx).Warn("no valid key for split region",
+				log.L().Warn("no valid key for split region",
 					logutil.Key("firstKey", firstKeyEnc), logutil.Key("lastKey", lastKeyEnc),
 					logutil.Key("firstRegionStart", regions[0].Region.StartKey),
 					logutil.Key("lastRegionEnd", regions[len(regions)-1].Region.EndKey))
 				return errors.New("check split keys failed")
 			}
-			splitKeyMap = getSplitKeys(retryKeys, regions, log.FromContext(ctx))
+			splitKeyMap = getSplitKeys(retryKeys, regions)
 			retryKeys = retryKeys[:0]
 		} else {
-			splitKeyMap = getSplitKeysByRanges(ranges, regions, log.FromContext(ctx))
+			splitKeyMap = getSplitKeysByRanges(ranges, regions)
 		}
 
 		type splitInfo struct {
@@ -232,7 +231,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 							splitRegionStart := codec.EncodeBytes([]byte{}, keys[startIdx])
 							splitRegionEnd := codec.EncodeBytes([]byte{}, keys[endIdx-1])
 							if bytes.Compare(splitRegionStart, splitRegion.Region.StartKey) < 0 || !beforeEnd(splitRegionEnd, splitRegion.Region.EndKey) {
-								log.FromContext(ctx).Fatal("no valid key in region",
+								log.L().Fatal("no valid key in region",
 									logutil.Key("startKey", splitRegionStart), logutil.Key("endKey", splitRegionEnd),
 									logutil.Key("regionStart", splitRegion.Region.StartKey), logutil.Key("regionEnd", splitRegion.Region.EndKey),
 									logutil.Region(splitRegion.Region), logutil.Leader(splitRegion.Leader))
@@ -241,7 +240,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 							if err1 != nil {
 								if strings.Contains(err1.Error(), "no valid key") {
 									for _, key := range keys {
-										log.FromContext(ctx).Warn("no valid key",
+										log.L().Warn("no valid key",
 											logutil.Key("startKey", region.Region.StartKey),
 											logutil.Key("endKey", region.Region.EndKey),
 											logutil.Key("key", codec.EncodeBytes([]byte{}, key)))
@@ -251,7 +250,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 									// do not retry on context.Canceled error
 									return err1
 								}
-								log.FromContext(ctx).Warn("split regions", log.ShortError(err1), zap.Int("retry time", i),
+								log.L().Warn("split regions", log.ShortError(err1), zap.Int("retry time", i),
 									zap.Uint64("region_id", region.Region.Id))
 
 								syncLock.Lock()
@@ -261,7 +260,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 								syncLock.Unlock()
 								break
 							} else {
-								log.FromContext(ctx).Info("batch split region", zap.Uint64("region_id", splitRegion.Region.Id),
+								log.L().Info("batch split region", zap.Uint64("region_id", splitRegion.Region.Id),
 									zap.Int("keys", endIdx-startIdx), zap.Binary("firstKey", keys[startIdx]),
 									zap.Binary("end", keys[endIdx-1]))
 								sort.Slice(newRegions, func(i, j int) bool {
@@ -293,7 +292,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 			// we can skip split it again.
 			regionSize, ok := tableRegionStats[regionID]
 			if !ok {
-				log.FromContext(ctx).Warn("region stats not found", zap.Uint64("region", regionID))
+				log.L().Warn("region stats not found", zap.Uint64("region", regionID))
 			}
 			if len(keys) == 1 && regionSize < regionSplitSize {
 				skippedKeys++
@@ -331,18 +330,24 @@ func (local *local) SplitAndScatterRegionByRanges(
 	}
 
 	startTime := time.Now()
-	scatterCount, err := local.waitForScatterRegions(ctx, scatterRegions)
+	scatterCount := 0
+	for _, region := range scatterRegions {
+		local.waitForScatterRegion(ctx, region)
+		if time.Since(startTime) > split.ScatterWaitUpperInterval {
+			break
+		}
+		scatterCount++
+	}
 	if scatterCount == len(scatterRegions) {
-		log.FromContext(ctx).Info("waiting for scattering regions done",
+		log.L().Info("waiting for scattering regions done",
 			zap.Int("skipped_keys", skippedKeys),
 			zap.Int("regions", len(scatterRegions)), zap.Duration("take", time.Since(startTime)))
 	} else {
-		log.FromContext(ctx).Info("waiting for scattering regions timeout",
+		log.L().Info("waiting for scattering regions timeout",
 			zap.Int("skipped_keys", skippedKeys),
 			zap.Int("scatterCount", scatterCount),
 			zap.Int("regions", len(scatterRegions)),
-			zap.Duration("take", time.Since(startTime)),
-			zap.Error(err))
+			zap.Duration("take", time.Since(startTime)))
 	}
 	return nil
 }
@@ -350,7 +355,7 @@ func (local *local) SplitAndScatterRegionByRanges(
 func fetchTableRegionSizeStats(ctx context.Context, db *sql.DB, tableID int64) (map[uint64]int64, error) {
 	exec := &common.SQLWithRetry{
 		DB:     db,
-		Logger: log.FromContext(ctx),
+		Logger: log.L(),
 	}
 
 	stats := make(map[uint64]int64)
@@ -399,7 +404,7 @@ func (local *local) BatchSplitRegions(ctx context.Context, region *split.RegionI
 		}
 		// the scatter operation likely fails because region replicate not finish yet
 		// pack them to one log to avoid printing a lot warn logs.
-		log.FromContext(ctx).Warn("scatter region failed", zap.Int("regionCount", len(newRegions)),
+		log.L().Warn("scatter region failed", zap.Int("regionCount", len(newRegions)),
 			zap.Int("failedCount", len(retryRegions)), zap.Error(failedErr), zap.Int("retry", i))
 		scatterRegions = retryRegions
 		retryRegions = make([]*split.RegionInfo, 0)
@@ -426,7 +431,7 @@ func (local *local) waitForSplit(ctx context.Context, regionID uint64) {
 	for i := 0; i < split.SplitCheckMaxRetryTimes; i++ {
 		ok, err := local.hasRegion(ctx, regionID)
 		if err != nil {
-			log.FromContext(ctx).Info("wait for split failed", log.ShortError(err))
+			log.L().Info("wait for split failed", log.ShortError(err))
 			return
 		}
 		if ok {
@@ -440,38 +445,28 @@ func (local *local) waitForSplit(ctx context.Context, regionID uint64) {
 	}
 }
 
-func (local *local) waitForScatterRegions(ctx context.Context, regions []*split.RegionInfo) (scatterCount int, _ error) {
-	subCtx, cancel := context.WithTimeout(ctx, split.ScatterWaitUpperInterval)
-	defer cancel()
-
-	for len(regions) > 0 {
-		var retryRegions []*split.RegionInfo
-		for _, region := range regions {
-			scattered, err := local.checkRegionScatteredOrReScatter(subCtx, region)
-			if scattered {
-				scatterCount++
-				continue
-			}
-			if err != nil {
-				if !common.IsRetryableError(err) {
-					log.FromContext(ctx).Warn("wait for scatter region encountered non-retryable error", logutil.Region(region.Region), zap.Error(err))
-					return scatterCount, err
-				}
-				log.FromContext(ctx).Warn("wait for scatter region encountered error, will retry again", logutil.Region(region.Region), zap.Error(err))
-			}
-			retryRegions = append(retryRegions, region)
+func (local *local) waitForScatterRegion(ctx context.Context, regionInfo *split.RegionInfo) {
+	for i := 0; i < split.ScatterWaitMaxRetryTimes; i++ {
+		ok, err := local.checkScatterRegionFinishedOrReScatter(ctx, regionInfo)
+		if ok {
+			return
 		}
-		regions = retryRegions
+		if err != nil {
+			if !common.IsRetryableError(err) {
+				log.L().Warn("wait for scatter region encountered non-retryable error", logutil.Region(regionInfo.Region), zap.Error(err))
+				return
+			}
+			log.L().Warn("wait for scatter region encountered error, will retry again", logutil.Region(regionInfo.Region), zap.Error(err))
+		}
 		select {
 		case <-time.After(time.Second):
-		case <-subCtx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
-	return scatterCount, nil
 }
 
-func (local *local) checkRegionScatteredOrReScatter(ctx context.Context, regionInfo *split.RegionInfo) (bool, error) {
+func (local *local) checkScatterRegionFinishedOrReScatter(ctx context.Context, regionInfo *split.RegionInfo) (bool, error) {
 	resp, err := local.splitCli.GetOperator(ctx, regionInfo.Region.GetId())
 	if err != nil {
 		return false, err
@@ -481,9 +476,13 @@ func (local *local) checkRegionScatteredOrReScatter(ctx context.Context, regionI
 		if respErr.GetType() == pdpb.ErrorType_REGION_NOT_FOUND {
 			return true, nil
 		}
-		return false, errors.Errorf(
-			"failed to get region operator, error type: %s, error message: %s",
-			respErr.GetType().String(), respErr.GetMessage())
+		// don't return error if region replicate not complete
+		// TODO: should add a new error type to avoid this check by string matching
+		matches, _ := regexp.MatchString("region \\d+ is not fully replicated", respErr.Message)
+		if matches {
+			return false, nil
+		}
+		return false, errors.Errorf("get operator error: %s", respErr.GetType())
 	}
 	// If the current operator of the region is not 'scatter-region', we could assume
 	// that 'scatter-operator' has finished.
@@ -496,13 +495,13 @@ func (local *local) checkRegionScatteredOrReScatter(ctx context.Context, regionI
 	case pdpb.OperatorStatus_SUCCESS:
 		return true, nil
 	default:
-		log.FromContext(ctx).Warn("scatter-region operator status is abnormal, will scatter region again",
+		log.L().Warn("scatter-region operator status is abnormal, will scatter region again",
 			logutil.Region(regionInfo.Region), zap.Stringer("status", resp.GetStatus()))
 		return false, local.splitCli.ScatterRegion(ctx, regionInfo)
 	}
 }
 
-func getSplitKeysByRanges(ranges []Range, regions []*split.RegionInfo, logger log.Logger) map[uint64][][]byte {
+func getSplitKeysByRanges(ranges []Range, regions []*split.RegionInfo) map[uint64][][]byte {
 	checkKeys := make([][]byte, 0)
 	var lastEnd []byte
 	for _, rg := range ranges {
@@ -512,19 +511,19 @@ func getSplitKeysByRanges(ranges []Range, regions []*split.RegionInfo, logger lo
 		checkKeys = append(checkKeys, rg.end)
 		lastEnd = rg.end
 	}
-	return getSplitKeys(checkKeys, regions, logger)
+	return getSplitKeys(checkKeys, regions)
 }
 
-func getSplitKeys(checkKeys [][]byte, regions []*split.RegionInfo, logger log.Logger) map[uint64][][]byte {
+func getSplitKeys(checkKeys [][]byte, regions []*split.RegionInfo) map[uint64][][]byte {
 	splitKeyMap := make(map[uint64][][]byte)
 	for _, key := range checkKeys {
-		if region := needSplit(key, regions, logger); region != nil {
+		if region := needSplit(key, regions); region != nil {
 			splitKeys, ok := splitKeyMap[region.Region.GetId()]
 			if !ok {
 				splitKeys = make([][]byte, 0, 1)
 			}
 			splitKeyMap[region.Region.GetId()] = append(splitKeys, key)
-			logger.Debug("get key for split region",
+			log.L().Debug("get key for split region",
 				zap.Binary("key", key),
 				zap.Binary("startKey", region.Region.StartKey),
 				zap.Binary("endKey", region.Region.EndKey))
@@ -534,7 +533,7 @@ func getSplitKeys(checkKeys [][]byte, regions []*split.RegionInfo, logger log.Lo
 }
 
 // needSplit checks whether a key is necessary to split, if true returns the split region
-func needSplit(key []byte, regions []*split.RegionInfo, logger log.Logger) *split.RegionInfo {
+func needSplit(key []byte, regions []*split.RegionInfo) *split.RegionInfo {
 	// If splitKey is the max key.
 	if len(key) == 0 {
 		return nil
@@ -547,7 +546,7 @@ func needSplit(key []byte, regions []*split.RegionInfo, logger log.Logger) *spli
 	if idx < len(regions) {
 		// If splitKey is in a region
 		if bytes.Compare(splitKey, regions[idx].Region.GetStartKey()) > 0 && beforeEnd(splitKey, regions[idx].Region.GetEndKey()) {
-			logger.Debug("need split",
+			log.L().Debug("need split",
 				zap.Binary("splitKey", key),
 				zap.Binary("encodedKey", splitKey),
 				zap.Binary("region start", regions[idx].Region.GetStartKey()),
@@ -592,76 +591,4 @@ func intersectRange(region *metapb.Region, rg Range) Range {
 	}
 
 	return Range{start: startKey, end: endKey}
-}
-
-type StoreWriteLimiter interface {
-	WaitN(ctx context.Context, storeID uint64, n int) error
-	Limit() int
-}
-
-type storeWriteLimiter struct {
-	rwm      sync.RWMutex
-	limiters map[uint64]*rate.Limiter
-	limit    int
-	burst    int
-}
-
-func newStoreWriteLimiter(limit int) *storeWriteLimiter {
-	var burst int
-	// Allow burst of at most 20% of the limit.
-	if limit <= math.MaxInt-limit/5 {
-		burst = limit + limit/5
-	} else {
-		// If overflowed, set burst to math.MaxInt.
-		burst = math.MaxInt
-	}
-	return &storeWriteLimiter{
-		limiters: make(map[uint64]*rate.Limiter),
-		limit:    limit,
-		burst:    burst,
-	}
-}
-
-func (s *storeWriteLimiter) WaitN(ctx context.Context, storeID uint64, n int) error {
-	limiter := s.getLimiter(storeID)
-	// The original WaitN doesn't allow n > burst,
-	// so we call WaitN with burst multiple times.
-	for n > limiter.Burst() {
-		if err := limiter.WaitN(ctx, limiter.Burst()); err != nil {
-			return err
-		}
-		n -= limiter.Burst()
-	}
-	return limiter.WaitN(ctx, n)
-}
-
-func (s *storeWriteLimiter) Limit() int {
-	return s.limit
-}
-
-func (s *storeWriteLimiter) getLimiter(storeID uint64) *rate.Limiter {
-	s.rwm.RLock()
-	limiter, ok := s.limiters[storeID]
-	s.rwm.RUnlock()
-	if ok {
-		return limiter
-	}
-	s.rwm.Lock()
-	defer s.rwm.Unlock()
-	limiter, ok = s.limiters[storeID]
-	if !ok {
-		limiter = rate.NewLimiter(rate.Limit(s.limit), s.burst)
-		s.limiters[storeID] = limiter
-	}
-	return limiter
-}
-
-type noopStoreWriteLimiter struct{}
-
-func (noopStoreWriteLimiter) WaitN(ctx context.Context, storeID uint64, n int) error {
-	return nil
-}
-
-func (noopStoreWriteLimiter) Limit() int {
-	return math.MaxInt
 }

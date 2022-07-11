@@ -49,19 +49,11 @@ func (b *executorBuilder) buildPointGet(p *plannercore.PointGetPlan) Executor {
 		return nil
 	}
 
-	if p.Lock && !b.inSelectLockStmt {
-		b.inSelectLockStmt = true
-		defer func() {
-			b.inSelectLockStmt = false
-		}()
-	}
-
-	snapshotTS, err := b.getSnapshotTS()
+	startTS, err := b.getSnapshotTS()
 	if err != nil {
 		b.err = err
 		return nil
 	}
-
 	e := &PointGetExecutor{
 		baseExecutor:     newBaseExecutor(b.ctx, p.Schema(), p.ID()),
 		readReplicaScope: b.readReplicaScope,
@@ -69,17 +61,14 @@ func (b *executorBuilder) buildPointGet(p *plannercore.PointGetPlan) Executor {
 	}
 
 	if p.TblInfo.TableCacheStatusType == model.TableCacheStatusEnable {
-		e.cacheTable = b.getCacheTable(p.TblInfo, snapshotTS)
+		e.cacheTable = b.getCacheTable(p.TblInfo, startTS)
 	}
-
 	e.base().initCap = 1
 	e.base().maxChunkSize = 1
-	e.Init(p, snapshotTS)
-
+	e.Init(p, startTS)
 	if e.lock {
 		b.hasLock = true
 	}
-
 	return e
 }
 
@@ -94,7 +83,7 @@ type PointGetExecutor struct {
 	idxKey           kv.Key
 	handleVal        []byte
 	idxVals          []types.Datum
-	snapshotTS       uint64
+	startTS          uint64
 	readReplicaScope string
 	isStaleness      bool
 	txn              kv.Transaction
@@ -117,13 +106,13 @@ type PointGetExecutor struct {
 }
 
 // Init set fields needed for PointGetExecutor reuse, this does NOT change baseExecutor field
-func (e *PointGetExecutor) Init(p *plannercore.PointGetPlan, snapshotTS uint64) {
+func (e *PointGetExecutor) Init(p *plannercore.PointGetPlan, startTs uint64) {
 	decoder := NewRowDecoder(e.ctx, p.Schema(), p.TblInfo)
 	e.tblInfo = p.TblInfo
 	e.handle = p.Handle
 	e.idxInfo = p.IndexInfo
 	e.idxVals = p.IndexValues
-	e.snapshotTS = snapshotTS
+	e.startTS = startTs
 	e.done = false
 	if e.tblInfo.TempTableType == model.TempTableNone {
 		e.lock = p.Lock
@@ -153,7 +142,10 @@ func (e *PointGetExecutor) buildVirtualColumnInfo() {
 // Open implements the Executor interface.
 func (e *PointGetExecutor) Open(context.Context) error {
 	txnCtx := e.ctx.GetSessionVars().TxnCtx
-	snapshotTS := e.snapshotTS
+	snapshotTS := e.startTS
+	if e.lock {
+		snapshotTS = txnCtx.GetForUpdateTS()
+	}
 	var err error
 	e.txn, err = e.ctx.Txn(false)
 	if err != nil {
@@ -389,12 +381,9 @@ func (e *PointGetExecutor) lockKeyIfNeeded(ctx context.Context, key []byte) erro
 	}
 	if e.lock {
 		seVars := e.ctx.GetSessionVars()
-		lockCtx, err := newLockCtx(e.ctx, e.lockWaitTime, 1)
-		if err != nil {
-			return err
-		}
+		lockCtx := newLockCtx(seVars, e.lockWaitTime, 1)
 		lockCtx.InitReturnValues(1)
-		err = doLockKeys(ctx, e.ctx, lockCtx, key)
+		err := doLockKeys(ctx, e.ctx, lockCtx, key)
 		if err != nil {
 			return err
 		}

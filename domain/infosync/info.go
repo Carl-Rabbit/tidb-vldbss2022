@@ -265,7 +265,7 @@ func SetMockTiFlash(tiflash *MockTiFlash) {
 
 	m, ok := is.tiflashPlacementManager.(*mockTiFlashPlacementManager)
 	if ok {
-		m.SetMockTiFlash(tiflash)
+		m.tiflash = tiflash
 	}
 }
 

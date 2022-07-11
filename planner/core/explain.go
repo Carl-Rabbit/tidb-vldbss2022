@@ -325,7 +325,7 @@ func (p *PhysicalTableScan) isFullScan() bool {
 
 // ExplainInfo implements Plan interface.
 func (p *PhysicalTableReader) ExplainInfo() string {
-	return "data:" + p.tablePlan.ExplainID().String()
+	return fmt.Sprintf("data:%v", p.tablePlan.ExplainID().String())
 }
 
 // ExplainNormalizedInfo implements Plan interface.
@@ -427,7 +427,7 @@ func (p *PhysicalTableReader) OperatorInfo(normalized bool) string {
 
 // ExplainInfo implements Plan interface.
 func (p *PhysicalIndexReader) ExplainInfo() string {
-	return "index:" + p.indexPlan.ExplainID().String()
+	return fmt.Sprintf("index:%v", p.indexPlan.ExplainID().String())
 }
 
 // ExplainNormalizedInfo implements Plan interface.
@@ -465,6 +465,17 @@ func (p *PhysicalIndexLookUpReader) ExplainInfo() string {
 		str.WriteString(", count:")
 		str.WriteString(strconv.FormatUint(p.PushedLimit.Count, 10))
 		str.WriteString(")")
+	}
+	if p.Paging {
+		if p.PushedLimit != nil {
+			str.WriteString(", ")
+		}
+		str.WriteString("paging:true")
+	}
+	if str.Len() > 0 {
+		str.WriteString(fmt.Sprintf(", batch_size: %v", p.ctx.GetSessionVars().IndexLookupSize))
+	} else {
+		str.WriteString(fmt.Sprintf("batch_size: %v", p.ctx.GetSessionVars().IndexLookupSize))
 	}
 	return str.String()
 }

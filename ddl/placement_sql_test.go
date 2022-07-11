@@ -136,9 +136,9 @@ PARTITION BY RANGE (c) (
 			tk.MustExec("set @@autocommit = 0")
 			tk.MustExec("begin")
 			tk.MustExec(testcase.sql)
-			err = tk.ExecToErr("commit")
+			_, err = tk.Exec("commit")
 		} else {
-			err = tk.ExecToErr(testcase.sql)
+			_, err = tk.Exec(testcase.sql)
 		}
 		if testcase.err == nil {
 			require.NoError(t, err)

@@ -63,6 +63,7 @@ func TestColumnAdd(t *testing.T) {
 	var jobID int64
 	tc.OnJobUpdatedExported = func(job *model.Job) {
 		jobID = job.ID
+		require.NoError(t, dom.Reload())
 		tbl, exist := dom.InfoSchema().TableByID(job.TableID)
 		require.True(t, exist)
 		switch job.SchemaState {
@@ -95,9 +96,6 @@ func TestColumnAdd(t *testing.T) {
 		}
 	}
 	tc.OnJobUpdatedExported = func(job *model.Job) {
-		if job.NotStarted() {
-			return
-		}
 		jobID = job.ID
 		tbl := external.GetTableByName(t, internal, "test", "t")
 		if job.SchemaState != model.StatePublic {
@@ -226,7 +224,7 @@ func checkAddWriteOnly(ctx sessionctx.Context, deleteOnlyTable, writeOnlyTable t
 		return errors.Trace(err)
 	}
 	err = checkResult(ctx, writeOnlyTable, writeOnlyTable.WritableCols(), [][]string{
-		{"1", "2", "3"},
+		{"1", "2", "<nil>"},
 		{"2", "3", "3"},
 	})
 	if err != nil {
@@ -238,7 +236,7 @@ func checkAddWriteOnly(ctx sessionctx.Context, deleteOnlyTable, writeOnlyTable t
 		return errors.Trace(err)
 	}
 	got := fmt.Sprintf("%v", row)
-	expect := fmt.Sprintf("%v", []types.Datum{types.NewDatum(1), types.NewDatum(2), types.NewDatum(3)})
+	expect := fmt.Sprintf("%v", []types.Datum{types.NewDatum(1), types.NewDatum(2), types.NewDatum(nil)})
 	if got != expect {
 		return errors.Errorf("expect %v, got %v", expect, got)
 	}
@@ -417,13 +415,7 @@ func testCheckJobDone(t *testing.T, store kv.Storage, jobID int64, isAdd bool) {
 	require.NoError(t, err)
 	require.Equal(t, historyJob.State, model.JobStateSynced)
 	if isAdd {
-		if historyJob.Type == model.ActionMultiSchemaChange {
-			for _, sub := range historyJob.MultiSchemaInfo.SubJobs {
-				require.Equal(t, sub.SchemaState, model.StatePublic)
-			}
-		} else {
-			require.Equal(t, historyJob.SchemaState, model.StatePublic)
-		}
+		require.Equal(t, historyJob.SchemaState, model.StatePublic)
 	} else {
 		require.Equal(t, historyJob.SchemaState, model.StateNone)
 	}

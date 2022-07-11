@@ -686,15 +686,14 @@ func TestConnExecutionTimeout(t *testing.T) {
 
 	// There is no underlying netCon, use failpoint to avoid panic
 	require.NoError(t, failpoint.Enable("github.com/pingcap/tidb/server/FakeClientConn", "return(1)"))
-	defer func() {
-		require.NoError(t, failpoint.Disable("github.com/pingcap/tidb/server/FakeClientConn"))
-	}()
-	tk := testkit.NewTestKit(t, store)
+
+	se, err := session.CreateSession4Test(store)
+	require.NoError(t, err)
 
 	connID := uint64(1)
-	tk.Session().SetConnectionID(connID)
+	se.SetConnectionID(connID)
 	tc := &TiDBContext{
-		Session: tk.Session(),
+		Session: se,
 		stmts:   make(map[int]*TiDBStatement),
 	}
 	cc := &clientConn{
@@ -715,32 +714,46 @@ func TestConnExecutionTimeout(t *testing.T) {
 	handle := dom.ExpensiveQueryHandle().SetSessionManager(srv)
 	go handle.Run()
 
-	tk.MustExec("use test;")
-	tk.MustExec("CREATE TABLE testTable2 (id bigint PRIMARY KEY,  age int)")
+	_, err = se.Execute(context.Background(), "use test;")
+	require.NoError(t, err)
+	_, err = se.Execute(context.Background(), "CREATE TABLE testTable2 (id bigint PRIMARY KEY,  age int)")
+	require.NoError(t, err)
 	for i := 0; i < 10; i++ {
 		str := fmt.Sprintf("insert into testTable2 values(%d, %d)", i, i%80)
-		tk.MustExec(str)
+		_, err = se.Execute(context.Background(), str)
+		require.NoError(t, err)
 	}
 
-	tk.MustExec("select SLEEP(1);")
-	tk.MustExec("set @@max_execution_time = 500;")
-	tk.MustQuery("select * FROM testTable2 WHERE SLEEP(1);")
-	tk.MustExec("set @@max_execution_time = 1500;")
-	tk.MustExec("set @@tidb_expensive_query_time_threshold = 1;")
-
-	records, err := tk.Exec("select SLEEP(2);")
+	_, err = se.Execute(context.Background(), "select SLEEP(1);")
 	require.NoError(t, err)
-	tk1 := testkit.NewTestKit(t, store)
-	tk1.ResultSetToResult(records, fmt.Sprintf("%v", records)).Check(testkit.Rows("1"))
-	require.NoError(t, records.Close())
 
-	tk.MustExec("set @@max_execution_time = 0;")
+	_, err = se.Execute(context.Background(), "set @@max_execution_time = 500;")
+	require.NoError(t, err)
+
+	err = cc.handleQuery(context.Background(), "select * FROM testTable2 WHERE SLEEP(1);")
+	require.NoError(t, err)
+
+	_, err = se.Execute(context.Background(), "set @@max_execution_time = 1500;")
+	require.NoError(t, err)
+
+	_, err = se.Execute(context.Background(), "set @@tidb_expensive_query_time_threshold = 1;")
+	require.NoError(t, err)
+
+	records, err := se.Execute(context.Background(), "select SLEEP(2);")
+	require.NoError(t, err)
+	tk := testkit.NewTestKit(t, store)
+	tk.ResultSetToResult(records[0], fmt.Sprintf("%v", records[0])).Check(testkit.Rows("1"))
+
+	_, err = se.Execute(context.Background(), "set @@max_execution_time = 0;")
+	require.NoError(t, err)
 
 	err = cc.handleQuery(context.Background(), "select * FROM testTable2 WHERE SLEEP(1);")
 	require.NoError(t, err)
 
 	err = cc.handleQuery(context.Background(), "select /*+ MAX_EXECUTION_TIME(100)*/  * FROM testTable2 WHERE  SLEEP(1);")
 	require.NoError(t, err)
+
+	require.NoError(t, failpoint.Disable("github.com/pingcap/tidb/server/FakeClientConn"))
 }
 
 func TestShutDown(t *testing.T) {

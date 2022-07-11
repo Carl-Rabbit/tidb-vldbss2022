@@ -25,7 +25,6 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/pingcap/tidb/br/pkg/lightning/log"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 
@@ -42,7 +41,7 @@ func TestInit(t *testing.T) {
 	cfg.App.MaxError.Type.Store(10)
 	cfg.App.TaskInfoSchemaName = "lightning_errors"
 
-	em := New(db, cfg, log.L())
+	em := New(db, cfg)
 	require.Equal(t, cfg.TikvImporter.DuplicateResolution, em.dupResolution)
 	require.Equal(t, cfg.App.MaxError.Type.Load(), em.remainingError.Type.Load())
 	require.Equal(t, cfg.App.MaxError.Conflict.Load(), em.remainingError.Conflict.Load())
@@ -163,7 +162,7 @@ func TestResolveAllConflictKeys(t *testing.T) {
 	cfg := config.NewConfig()
 	cfg.TikvImporter.DuplicateResolution = config.DupeResAlgRemove
 	cfg.App.TaskInfoSchemaName = "lightning_errors"
-	em := New(db, cfg, log.L())
+	em := New(db, cfg)
 	ctx := context.Background()
 	err = em.Init(ctx)
 	require.NoError(t, err)

@@ -101,26 +101,28 @@ var (
 
 // DDL is responsible for updating schema in data store and maintaining in-memory InfoSchema cache.
 type DDL interface {
-	CreateSchema(ctx sessionctx.Context, stmt *ast.CreateDatabaseStmt) error
+	CreateSchema(ctx sessionctx.Context, schema model.CIStr, charsetInfo *ast.CharsetOpt, placementPolicyRef *model.PolicyRefInfo) error
 	AlterSchema(sctx sessionctx.Context, stmt *ast.AlterDatabaseStmt) error
-	DropSchema(ctx sessionctx.Context, stmt *ast.DropDatabaseStmt) error
+	DropSchema(ctx sessionctx.Context, schema model.CIStr) error
 	CreateTable(ctx sessionctx.Context, stmt *ast.CreateTableStmt) error
 	CreateView(ctx sessionctx.Context, stmt *ast.CreateViewStmt) error
-	DropTable(ctx sessionctx.Context, stmt *ast.DropTableStmt) (err error)
+	DropTable(ctx sessionctx.Context, tableIdent ast.Ident) (err error)
 	RecoverTable(ctx sessionctx.Context, recoverInfo *RecoverInfo) (err error)
-	DropView(ctx sessionctx.Context, stmt *ast.DropTableStmt) (err error)
-	CreateIndex(ctx sessionctx.Context, stmt *ast.CreateIndexStmt) error
-	DropIndex(ctx sessionctx.Context, stmt *ast.DropIndexStmt) error
-	AlterTable(ctx context.Context, sctx sessionctx.Context, stmt *ast.AlterTableStmt) error
+	DropView(ctx sessionctx.Context, tableIdent ast.Ident) (err error)
+	CreateIndex(ctx sessionctx.Context, tableIdent ast.Ident, keyType ast.IndexKeyType, indexName model.CIStr,
+		columnNames []*ast.IndexPartSpecification, indexOption *ast.IndexOption, ifNotExists bool) error
+	DropIndex(ctx sessionctx.Context, tableIdent ast.Ident, indexName model.CIStr, ifExists bool) error
+	AlterTable(ctx context.Context, sctx sessionctx.Context, tableIdent ast.Ident, spec []*ast.AlterTableSpec) error
 	TruncateTable(ctx sessionctx.Context, tableIdent ast.Ident) error
-	RenameTable(ctx sessionctx.Context, stmt *ast.RenameTableStmt) error
+	RenameTable(ctx sessionctx.Context, oldTableIdent, newTableIdent ast.Ident, isAlterTable bool) error
+	RenameTables(ctx sessionctx.Context, oldTableIdent, newTableIdent []ast.Ident, isAlterTable bool) error
 	LockTables(ctx sessionctx.Context, stmt *ast.LockTablesStmt) error
 	UnlockTables(ctx sessionctx.Context, lockedTables []model.TableLockTpInfo) error
 	CleanupTableLock(ctx sessionctx.Context, tables []*ast.TableName) error
 	UpdateTableReplicaInfo(ctx sessionctx.Context, physicalID int64, available bool) error
 	RepairTable(ctx sessionctx.Context, table *ast.TableName, createStmt *ast.CreateTableStmt) error
 	CreateSequence(ctx sessionctx.Context, stmt *ast.CreateSequenceStmt) error
-	DropSequence(ctx sessionctx.Context, stmt *ast.DropSequenceStmt) (err error)
+	DropSequence(ctx sessionctx.Context, tableIdent ast.Ident, ifExists bool) (err error)
 	AlterSequence(ctx sessionctx.Context, stmt *ast.AlterSequenceStmt) error
 	CreatePlacementPolicy(ctx sessionctx.Context, stmt *ast.CreatePlacementPolicyStmt) error
 	DropPlacementPolicy(ctx sessionctx.Context, stmt *ast.DropPlacementPolicyStmt) error
@@ -474,14 +476,6 @@ func (d *ddl) Start(ctxPool *pools.ResourcePool) error {
 	// If RunWorker is true, we need campaign owner and do DDL job.
 	// Otherwise, we needn't do that.
 	if RunWorker {
-		d.ownerManager.SetBeOwnerHook(func() {
-			var err error
-			d.ddlSeqNumMu.seqNum, err = d.GetNextDDLSeqNum()
-			if err != nil {
-				logutil.BgLogger().Error("error when getting the ddl history count", zap.Error(err))
-			}
-		})
-
 		err := d.ownerManager.CampaignOwner()
 		if err != nil {
 			return errors.Trace(err)
@@ -501,6 +495,11 @@ func (d *ddl) Start(ctxPool *pools.ResourcePool) error {
 			// When the start function is called, we will send a fake job to let worker
 			// checks owner firstly and try to find whether a job exists and run.
 			asyncNotify(worker.ddlJobCh)
+		}
+
+		d.ddlSeqNumMu.seqNum, err = d.GetNextDDLSeqNum()
+		if err != nil {
+			return err
 		}
 
 		go d.schemaSyncer.StartCleanWork()
@@ -545,7 +544,7 @@ func (d *ddl) close() {
 	d.schemaSyncer.Close()
 
 	for _, worker := range d.workers {
-		worker.Close()
+		worker.close()
 	}
 	// d.delRangeMgr using sessions from d.sessPool.
 	// Put it before d.sessPool.close to reduce the time spent by d.sessPool.close.
@@ -710,28 +709,10 @@ func setDDLJobQuery(ctx sessionctx.Context, job *model.Job) {
 // - context.Cancel: job has been sent to worker, but not found in history DDL job before cancel
 // - other: found in history DDL job and return that job error
 func (d *ddl) DoDDLJob(ctx sessionctx.Context, job *model.Job) error {
-	if mci := ctx.GetSessionVars().StmtCtx.MultiSchemaInfo; mci != nil {
-		// In multiple schema change, we don't run the job.
-		// Instead, we merge all the jobs into one pending job.
-		return appendToSubJobs(mci, job)
-	}
-
 	// Get a global job ID and put the DDL job in the queue.
 	setDDLJobQuery(ctx, job)
 	task := &limitJobTask{job, make(chan error)}
 	d.limitJobCh <- task
-
-	failpoint.Inject("mockParallelSameDDLJobTwice", func(val failpoint.Value) {
-		if val.(bool) {
-			// The same job will be put to the DDL queue twice.
-			task1 := &limitJobTask{job, make(chan error)}
-			d.limitJobCh <- task1
-			<-task.err
-			// The second job result is used for test.
-			task = task1
-		}
-	})
-
 	// worker should restart to continue handling tasks in limitJobCh, and send back through task.err
 	err := <-task.err
 	if err != nil {
@@ -747,11 +728,6 @@ func (d *ddl) DoDDLJob(ctx sessionctx.Context, job *model.Job) error {
 
 	var historyJob *model.Job
 	jobID := job.ID
-
-	// Attach the context of the jobId to the calling session so that
-	// KILL can cancel this DDL job.
-	ctx.GetSessionVars().StmtCtx.DDLJobID = jobID
-
 	// For a job from start to end, the state of it will be none -> delete only -> write only -> reorganization -> public
 	// For every state changes, we will wait as lease 2 * lease time, so here the ticker check is 10 * lease.
 	// But we use etcd to speed up, normally it takes less than 0.5s now, so we use 0.5s or 1s or 3s as the max value.
@@ -807,7 +783,12 @@ func (d *ddl) DoDDLJob(ctx sessionctx.Context, job *model.Job) error {
 					}
 				}
 			}
-			appendMultiChangeWarningsToOwnerCtx(ctx, historyJob)
+
+			if historyJob.MultiSchemaInfo != nil && len(historyJob.MultiSchemaInfo.Warnings) != 0 {
+				for _, warning := range historyJob.MultiSchemaInfo.Warnings {
+					ctx.GetSessionVars().StmtCtx.AppendWarning(warning)
+				}
+			}
 
 			logutil.BgLogger().Info("[ddl] DDL job is finished", zap.Int64("jobID", jobID))
 			return nil
@@ -818,7 +799,7 @@ func (d *ddl) DoDDLJob(ctx sessionctx.Context, job *model.Job) error {
 			return errors.Trace(historyJob.Error)
 		}
 		// Only for JobStateCancelled job which is adding columns or drop columns or drop indexes.
-		if historyJob.IsCancelled() && (historyJob.Type == model.ActionDropIndexes) {
+		if historyJob.IsCancelled() && (historyJob.Type == model.ActionAddColumns || historyJob.Type == model.ActionDropColumns || historyJob.Type == model.ActionDropIndexes) {
 			if historyJob.MultiSchemaInfo != nil && len(historyJob.MultiSchemaInfo.Warnings) != 0 {
 				for _, warning := range historyJob.MultiSchemaInfo.Warnings {
 					ctx.GetSessionVars().StmtCtx.AppendWarning(warning)
@@ -831,11 +812,7 @@ func (d *ddl) DoDDLJob(ctx sessionctx.Context, job *model.Job) error {
 	}
 }
 
-func (d *ddl) callHookOnChanged(job *model.Job, err error) error {
-	if job.State == model.JobStateNone {
-		// We don't call the hook if the job haven't run yet.
-		return err
-	}
+func (d *ddl) callHookOnChanged(err error) error {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 

@@ -23,7 +23,8 @@ import (
 
 	"github.com/pingcap/tidb/config"
 	"github.com/pingcap/tidb/kv"
-	tmysql "github.com/pingcap/tidb/parser/mysql"
+	"github.com/pingcap/tidb/parser/mysql"
+	"github.com/pingcap/tidb/session"
 	"github.com/pingcap/tidb/util/arena"
 	"github.com/pingcap/tidb/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -84,14 +85,18 @@ func CreateMockServer(t *testing.T, store kv.Storage) *Server {
 }
 
 // CreateMockConn creates a mock connection together with a session.
-func CreateMockConn(t *testing.T, server *Server) MockConn {
-	tc, err := server.driver.OpenCtx(uint64(0), 0, uint8(tmysql.DefaultCollationID), "", nil)
+func CreateMockConn(t *testing.T, store kv.Storage, server *Server) MockConn {
+	se, err := session.CreateSession4Test(store)
 	require.NoError(t, err)
+	tc := &TiDBContext{
+		Session: se,
+		stmts:   make(map[int]*TiDBStatement),
+	}
 
 	cc := &clientConn{
 		server:     server,
 		salt:       []byte{},
-		collation:  tmysql.DefaultCollationID,
+		collation:  mysql.DefaultCollationID,
 		alloc:      arena.NewAllocator(1024),
 		chunkAlloc: chunk.NewAllocator(),
 		pkt: &packetIO{

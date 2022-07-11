@@ -270,6 +270,7 @@ func TestRequestBuilder1(t *testing.T) {
 		IsolationLevel:   0,
 		Priority:         0,
 		NotFillCache:     false,
+		Streaming:        false,
 		ReplicaRead:      kv.ReplicaReadLeader,
 		ReadReplicaScope: kv.GlobalReplicaScope,
 	}
@@ -351,6 +352,7 @@ func TestRequestBuilder2(t *testing.T) {
 		IsolationLevel:   0,
 		Priority:         0,
 		NotFillCache:     false,
+		Streaming:        false,
 		ReplicaRead:      kv.ReplicaReadLeader,
 		ReadReplicaScope: kv.GlobalReplicaScope,
 	}
@@ -398,6 +400,7 @@ func TestRequestBuilder3(t *testing.T) {
 		IsolationLevel:   0,
 		Priority:         0,
 		NotFillCache:     false,
+		Streaming:        false,
 		ReplicaRead:      kv.ReplicaReadLeader,
 		ReadReplicaScope: kv.GlobalReplicaScope,
 	}
@@ -429,6 +432,7 @@ func TestRequestBuilder4(t *testing.T) {
 		SetDAGRequest(&tipb.DAGRequest{}).
 		SetDesc(false).
 		SetKeepOrder(false).
+		SetStreaming(true).
 		SetFromSessionVars(variable.NewSessionVars()).
 		Build()
 	require.NoError(t, err)
@@ -443,6 +447,7 @@ func TestRequestBuilder4(t *testing.T) {
 		Concurrency:      variable.DefDistSQLScanConcurrency,
 		IsolationLevel:   0,
 		Priority:         0,
+		Streaming:        true,
 		NotFillCache:     false,
 		ReplicaRead:      kv.ReplicaReadLeader,
 		ReadReplicaScope: kv.GlobalReplicaScope,
@@ -488,6 +493,7 @@ func TestRequestBuilder5(t *testing.T) {
 		IsolationLevel:   kv.RC,
 		Priority:         1,
 		NotFillCache:     true,
+		Streaming:        false,
 		ReadReplicaScope: kv.GlobalReplicaScope,
 	}
 	require.Equal(t, expect, actual)
@@ -517,6 +523,7 @@ func TestRequestBuilder6(t *testing.T) {
 		IsolationLevel:   0,
 		Priority:         0,
 		NotFillCache:     true,
+		Streaming:        false,
 		ReadReplicaScope: kv.GlobalReplicaScope,
 	}
 	require.Equal(t, expect, actual)
@@ -552,6 +559,7 @@ func TestRequestBuilder7(t *testing.T) {
 				IsolationLevel:   0,
 				Priority:         0,
 				NotFillCache:     false,
+				Streaming:        false,
 				ReplicaRead:      replicaRead.replicaReadType,
 				ReadReplicaScope: kv.GlobalReplicaScope,
 			}

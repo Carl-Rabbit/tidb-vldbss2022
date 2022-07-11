@@ -102,7 +102,8 @@ func TestColumnTypeChangeBetweenInteger(t *testing.T) {
 	tk.MustGetErrCode("alter table t modify column a mediumint", errno.ErrDataOutOfRange)
 	tk.MustGetErrCode("alter table t modify column a smallint", errno.ErrDataOutOfRange)
 	tk.MustGetErrCode("alter table t modify column a tinyint", errno.ErrDataOutOfRange)
-	tk.MustExec("admin check table t")
+	_, err = tk.Exec("admin check table t")
+	require.NoError(t, err)
 }
 
 func TestColumnTypeChangeStateBetweenInteger(t *testing.T) {
@@ -661,7 +662,7 @@ func TestColumnTypeChangeFromStringToOthers(t *testing.T) {
 
 	// MySQL will get "ERROR 1366 (HY000): Incorrect DECIMAL value: '0' for column '' at row -1" error.
 	tk.MustExec("insert into t(vc) values ('abc')")
-	tk.MustGetErrCode("alter table t modify vc decimal(5,3)", errno.ErrTruncatedWrongValue)
+	tk.MustGetErrCode("alter table t modify vc decimal(5,3)", errno.ErrBadNumber)
 }
 
 func TestColumnTypeChangeFromNumericToOthers(t *testing.T) {
@@ -1298,7 +1299,7 @@ func TestColumnTypeChangeFromJsonToOthers(t *testing.T) {
 	tk.MustExec("alter table t modify ui decimal(20, 10)")
 	tk.MustExec("alter table t modify f64 decimal(20, 10)")
 	// MySQL will get "ERROR 1366 (HY000): Incorrect DECIMAL value: '0' for column '' at row -1".
-	tk.MustGetErrCode("alter table t modify str decimal(20, 10)", errno.ErrTruncatedWrongValue)
+	tk.MustGetErrCode("alter table t modify str decimal(20, 10)", errno.ErrBadNumber)
 	tk.MustExec("alter table t modify nul decimal(20, 10)")
 	tk.MustQuery("select * from t").Check(testkit.Rows("{\"obj\": 100} [-1, 0, 1] null 1.0000000000 0.0000000000 -22.0000000000 22.0000000000 323232323.3232323500 \"json string\" <nil>"))
 
@@ -1721,7 +1722,7 @@ func TestChangingColOriginDefaultValueAfterAddColAndCastSucc(t *testing.T) {
 			// For writable column:
 			// Insert / Update should set the column with the casted-related column value.
 			sql := fmt.Sprintf("insert into t values(%d, %d, '2021-06-06 12:13:14')", i+3, i+3)
-			err := tk1.ExecToErr(sql)
+			_, err := tk1.Exec(sql)
 			if err != nil {
 				checkErr = err
 				return
@@ -1729,7 +1730,7 @@ func TestChangingColOriginDefaultValueAfterAddColAndCastSucc(t *testing.T) {
 			if job.SchemaState == model.StateWriteOnly {
 				// The casted value will be inserted into changing column too.
 				// for point get
-				err := tk1.ExecToErr("update t set b = -1 where a = 1")
+				_, err := tk1.Exec("update t set b = -1 where a = 1")
 				if err != nil {
 					checkErr = err
 					return
@@ -1737,7 +1738,7 @@ func TestChangingColOriginDefaultValueAfterAddColAndCastSucc(t *testing.T) {
 			} else {
 				// The casted value will be inserted into changing column too.
 				// for point get
-				err := tk1.ExecToErr("update t set b = -2 where a = 2")
+				_, err := tk1.Exec("update t set b = -2 where a = 2")
 				if err != nil {
 					checkErr = err
 					return
@@ -2331,13 +2332,19 @@ func TestChangeNullValueFromOtherTypeToTimestamp(t *testing.T) {
 
 	prepare2()
 	// only from other type NULL to timestamp type NOT NULL, it should be successful. (timestamp to timestamp excluded)
-	tk.MustGetErrMsg("alter table t modify column a timestamp NOT NULL", "[ddl:1265]Data truncated for column 'a' at row 1")
+	_, err = tk.Exec("alter table t modify column a timestamp NOT NULL")
+	require.Error(t, err)
+	require.Equal(t, "[ddl:1265]Data truncated for column 'a' at row 1", err.Error())
 
 	// Some dml cases.
 	tk.MustExec("drop table if exists t")
 	tk.MustExec("create table t(a timestamp NOT NULL)")
-	tk.MustGetErrMsg("insert into t values()", "[table:1364]Field 'a' doesn't have a default value")
-	tk.MustGetErrMsg("insert into t values(null)", "[table:1048]Column 'a' cannot be null")
+	_, err = tk.Exec("insert into t values()")
+	require.Error(t, err)
+	require.Equal(t, "[table:1364]Field 'a' doesn't have a default value", err.Error())
+
+	_, err = tk.Exec("insert into t values(null)")
+	require.Equal(t, "[table:1048]Column 'a' cannot be null", err.Error())
 }
 
 func TestColumnTypeChangeBetweenFloatAndDouble(t *testing.T) {

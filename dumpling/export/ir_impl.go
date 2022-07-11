@@ -92,10 +92,12 @@ func (iter *multiQueriesChunkIter) nextRows() {
 	for iter.id < len(iter.queries) {
 		rows := iter.rows
 		if rows != nil {
-			if err = rows.Close(); err != nil {
+			err = rows.Close()
+			if err != nil {
 				return
 			}
-			if err = rows.Err(); err != nil {
+			err = rows.Err()
+			if err != nil {
 				return
 			}
 		}

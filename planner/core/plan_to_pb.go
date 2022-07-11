@@ -47,11 +47,7 @@ func (p *PhysicalHashAgg) ToPB(ctx sessionctx.Context, storeType kv.StoreType) (
 		GroupBy: groupByExprs,
 	}
 	for _, aggFunc := range p.AggFuncs {
-		agg, err := aggregation.AggFuncToPBExpr(ctx, client, aggFunc, storeType)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		aggExec.AggFunc = append(aggExec.AggFunc, agg)
+		aggExec.AggFunc = append(aggExec.AggFunc, aggregation.AggFuncToPBExpr(ctx, client, aggFunc))
 	}
 	executorID := ""
 	if storeType == kv.TiFlash {
@@ -77,11 +73,7 @@ func (p *PhysicalStreamAgg) ToPB(ctx sessionctx.Context, storeType kv.StoreType)
 		GroupBy: groupByExprs,
 	}
 	for _, aggFunc := range p.AggFuncs {
-		agg, err := aggregation.AggFuncToPBExpr(ctx, client, aggFunc, storeType)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		aggExec.AggFunc = append(aggExec.AggFunc, agg)
+		aggExec.AggFunc = append(aggExec.AggFunc, aggregation.AggFuncToPBExpr(ctx, client, aggFunc))
 	}
 	executorID := ""
 	if storeType == kv.TiFlash {
@@ -266,19 +258,13 @@ func (e *PhysicalExchangeSender) ToPB(ctx sessionctx.Context, storeType kv.Store
 	hashColTypes := make([]*tipb.FieldType, 0, len(e.HashCols))
 	for _, col := range e.HashCols {
 		hashCols = append(hashCols, col.Col)
-		tp, err := expression.ToPBFieldTypeWithCheck(col.Col.RetType, storeType)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
+		tp := expression.ToPBFieldType(col.Col.RetType)
 		tp.Collate = col.CollateID
 		hashColTypes = append(hashColTypes, tp)
 	}
 	allFieldTypes := make([]*tipb.FieldType, 0, len(e.Schema().Columns))
 	for _, column := range e.Schema().Columns {
-		pbType, err := expression.ToPBFieldTypeWithCheck(column.RetType, storeType)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
+		pbType := expression.ToPBFieldType(column.RetType)
 		allFieldTypes = append(allFieldTypes, pbType)
 	}
 	hashColPb, err := expression.ExpressionsToPBList(ctx.GetSessionVars().StmtCtx, hashCols, ctx.GetClient())
@@ -315,10 +301,7 @@ func (e *PhysicalExchangeReceiver) ToPB(ctx sessionctx.Context, storeType kv.Sto
 
 	fieldTypes := make([]*tipb.FieldType, 0, len(e.Schema().Columns))
 	for _, column := range e.Schema().Columns {
-		pbType, err := expression.ToPBFieldTypeWithCheck(column.RetType, kv.TiFlash)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
+		pbType := expression.ToPBFieldType(column.RetType)
 		fieldTypes = append(fieldTypes, pbType)
 	}
 	ecExec := &tipb.ExchangeReceiver{
@@ -452,12 +435,8 @@ func (p *PhysicalHashJoin) ToPB(ctx sessionctx.Context, storeType kv.StoreType) 
 		chs, coll := equalCondition.CharsetAndCollation()
 		retType.SetCharset(chs)
 		retType.SetCollate(coll)
-		ty, err := expression.ToPBFieldTypeWithCheck(retType, storeType)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		probeFiledTypes = append(probeFiledTypes, ty)
-		buildFiledTypes = append(buildFiledTypes, ty)
+		probeFiledTypes = append(probeFiledTypes, expression.ToPBFieldType(retType))
+		buildFiledTypes = append(buildFiledTypes, expression.ToPBFieldType(retType))
 	}
 	join := &tipb.Join{
 		JoinType:                pbJoinType,
@@ -595,4 +574,16 @@ func SetPBColumnsDefaultValue(ctx sessionctx.Context, pbColumns []*tipb.ColumnIn
 		}
 	}
 	return nil
+}
+
+// SupportStreaming returns true if a pushed down operation supports using coprocessor streaming API.
+// Note that this function handle pushed down physical plan only! It's called in constructDAGReq.
+// Some plans are difficult (if possible) to implement streaming, and some are pointless to do so.
+// TODO: Support more kinds of physical plan.
+func SupportStreaming(p PhysicalPlan) bool {
+	switch p.(type) {
+	case *PhysicalIndexScan, *PhysicalSelection, *PhysicalTableScan:
+		return true
+	}
+	return false
 }

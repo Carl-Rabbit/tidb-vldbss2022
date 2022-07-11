@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -501,7 +502,7 @@ func (helper extractHelper) parseQuantiles(quantileSet set.StringSet) []float64 
 		}
 		quantiles = append(quantiles, v)
 	}
-	slices.Sort(quantiles)
+	sort.Float64s(quantiles)
 	return quantiles
 }
 

@@ -184,12 +184,6 @@ func (l *ListInDisk) GetChunk(chkIdx int) (*Chunk, error) {
 
 // GetRow gets a Row from the ListInDisk by RowPtr.
 func (l *ListInDisk) GetRow(ptr RowPtr) (row Row, err error) {
-	row, _, err = l.GetRowAndAppendToChunk(ptr, nil)
-	return row, err
-}
-
-// GetRowAndAppendToChunk gets a Row from the ListInDisk by RowPtr. Return the Row and the Ref Chunk.
-func (l *ListInDisk) GetRowAndAppendToChunk(ptr RowPtr, chk *Chunk) (row Row, _ *Chunk, err error) {
 	off, err := l.getOffset(ptr.ChkIdx, ptr.RowIdx)
 	if err != nil {
 		return
@@ -198,10 +192,10 @@ func (l *ListInDisk) GetRowAndAppendToChunk(ptr RowPtr, chk *Chunk) (row Row, _ 
 	format := rowInDisk{numCol: len(l.fieldTypes)}
 	_, err = format.ReadFrom(r)
 	if err != nil {
-		return row, nil, err
+		return row, err
 	}
-	row, chk = format.toRow(l.fieldTypes, chk)
-	return row, chk, err
+	row = format.toMutRow(l.fieldTypes).ToRow()
+	return row, err
 }
 
 func (l *ListInDisk) getOffset(chkIdx uint32, rowIdx uint32) (int64, error) {
@@ -354,7 +348,7 @@ type diskFormatRow struct {
 	sizesOfColumns []int64 // -1 means null
 	// cells represents raw data of not-null columns in one row.
 	// In convertFromRow, data from Row is shallow copied to cells.
-	// In toRow, data in cells is deep copied to Row.
+	// In toMutRow, data in cells is shallow copied to MutRow.
 	cells [][]byte
 }
 
@@ -384,28 +378,35 @@ func convertFromRow(row Row, reuse *diskFormatRow) (format *diskFormatRow) {
 	return
 }
 
-// toRow deserializes diskFormatRow to Row.
-func (format *diskFormatRow) toRow(fields []*types.FieldType, chk *Chunk) (Row, *Chunk) {
-	if chk == nil || chk.IsFull() {
-		chk = NewChunkWithCapacity(fields, 1024)
-	}
+// toMutRow deserializes diskFormatRow to MutRow.
+func (format *diskFormatRow) toMutRow(fields []*types.FieldType) MutRow {
+	chk := &Chunk{columns: make([]*Column, 0, len(format.sizesOfColumns))}
 	var cellOff int
 	for colIdx, size := range format.sizesOfColumns {
-		col := chk.columns[colIdx]
+		col := &Column{length: 1}
+		elemSize := getFixedLen(fields[colIdx])
 		if size == -1 { // isNull
-			col.AppendNull()
-		} else {
-			if col.isFixed() {
-				col.elemBuf = format.cells[cellOff]
-				col.finishAppendFixed()
+			col.nullBitmap = []byte{0}
+			if elemSize == varElemLen {
+				col.offsets = []int64{0, 0}
 			} else {
-				col.AppendBytes(format.cells[cellOff])
+				buf := make([]byte, elemSize)
+				col.data = buf
+				col.elemBuf = buf
 			}
+		} else {
+			col.nullBitmap = []byte{1}
+			col.data = format.cells[cellOff]
 			cellOff++
+			if elemSize == varElemLen {
+				col.offsets = []int64{0, int64(len(col.data))}
+			} else {
+				col.elemBuf = col.data
+			}
 		}
+		chk.columns = append(chk.columns, col)
 	}
-
-	return Row{c: chk, idx: chk.NumRows() - 1}, chk
+	return MutRow{c: chk}
 }
 
 // ReaderWithCache helps to read data that has not be flushed to underlying layer.

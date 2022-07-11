@@ -61,9 +61,6 @@ func (d *ddl) generalWorker() *worker {
 	return d.workers[generalWorker]
 }
 
-// JobNeedGCForTest is only used for test.
-var JobNeedGCForTest = jobNeedGC
-
 // GetMaxRowID is used for test.
 func GetMaxRowID(store kv.Storage, priority int, t table.Table, startHandle, endHandle kv.Key) (kv.Key, error) {
 	return getRangeEndKey(NewJobContext(), store, priority, t, startHandle, endHandle)
@@ -361,7 +358,7 @@ func TestNotifyDDLJob(t *testing.T) {
 	// Ensure that the notification is not handled in workers `start` function.
 	d.cancel()
 	for _, worker := range d.workers {
-		worker.Close()
+		worker.close()
 	}
 
 	job := &model.Job{
@@ -404,7 +401,7 @@ func TestNotifyDDLJob(t *testing.T) {
 	// Ensure that the notification is not handled by worker's "start".
 	d1.cancel()
 	for _, worker := range d1.workers {
-		worker.Close()
+		worker.close()
 	}
 	d1.ownerManager.RetireOwner()
 	d1.asyncNotifyWorker(job)
@@ -562,7 +559,7 @@ func TestReorg(t *testing.T) {
 			require.Equal(t, ctx.Value(testCtxKey), 1)
 			ctx.ClearValue(testCtxKey)
 
-			err = sessiontxn.NewTxn(context.Background(), ctx)
+			err = ctx.NewTxn(context.Background())
 			require.NoError(t, err)
 			txn, err := ctx.Txn(true)
 			require.NoError(t, err)
@@ -571,7 +568,7 @@ func TestReorg(t *testing.T) {
 			err = txn.Rollback()
 			require.NoError(t, err)
 
-			err = sessiontxn.NewTxn(context.Background(), ctx)
+			err = ctx.NewTxn(context.Background())
 			require.NoError(t, err)
 			txn, err = ctx.Txn(true)
 			require.NoError(t, err)
@@ -586,7 +583,7 @@ func TestReorg(t *testing.T) {
 				ID:          1,
 				SnapshotVer: 1, // Make sure it is not zero. So the reorgInfo's first is false.
 			}
-			err = sessiontxn.NewTxn(context.Background(), ctx)
+			err = ctx.NewTxn(context.Background())
 			require.NoError(t, err)
 			txn, err = ctx.Txn(true)
 			require.NoError(t, err)
@@ -617,7 +614,7 @@ func TestReorg(t *testing.T) {
 					// Test whether reorgInfo's Handle is update.
 					err = txn.Commit(context.Background())
 					require.NoError(t, err)
-					err = sessiontxn.NewTxn(context.Background(), ctx)
+					err = ctx.NewTxn(context.Background())
 					require.NoError(t, err)
 
 					m = meta.NewMeta(txn)
@@ -986,6 +983,28 @@ func TestGetHistoryDDLJobs(t *testing.T) {
 
 	err = txn.Rollback()
 	require.NoError(t, err)
+}
+
+func TestIsJobRollbackable(t *testing.T) {
+	cases := []struct {
+		tp     model.ActionType
+		state  model.SchemaState
+		result bool
+	}{
+		{model.ActionDropIndex, model.StateNone, true},
+		{model.ActionDropIndex, model.StateDeleteOnly, false},
+		{model.ActionDropSchema, model.StateDeleteOnly, false},
+		{model.ActionDropColumn, model.StateDeleteOnly, false},
+		{model.ActionDropColumns, model.StateDeleteOnly, false},
+		{model.ActionDropIndexes, model.StateDeleteOnly, false},
+	}
+	job := &model.Job{}
+	for _, ca := range cases {
+		job.Type = ca.tp
+		job.SchemaState = ca.state
+		re := job.IsRollbackable()
+		require.Equal(t, ca.result, re)
+	}
 }
 
 func TestError(t *testing.T) {

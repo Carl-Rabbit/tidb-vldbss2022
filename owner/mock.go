@@ -27,10 +27,9 @@ var _ Manager = &mockManager{}
 // It's used for local store and testing.
 // So this worker will always be the owner.
 type mockManager struct {
-	owner       int32
-	id          string // id is the ID of manager.
-	cancel      context.CancelFunc
-	beOwnerHook func()
+	owner  int32
+	id     string // id is the ID of manager.
+	cancel context.CancelFunc
 }
 
 // NewMockManager creates a new mock Manager.
@@ -53,9 +52,6 @@ func (m *mockManager) IsOwner() bool {
 }
 
 func (m *mockManager) toBeOwner() {
-	if m.beOwnerHook != nil {
-		m.beOwnerHook()
-	}
 	atomic.StoreInt32(&m.owner, 1)
 }
 
@@ -94,8 +90,4 @@ func (m *mockManager) ResignOwner(ctx context.Context) error {
 // RequireOwner implements Manager.RequireOwner interface.
 func (m *mockManager) RequireOwner(context.Context) error {
 	return nil
-}
-
-func (m *mockManager) SetBeOwnerHook(hook func()) {
-	m.beOwnerHook = hook
 }

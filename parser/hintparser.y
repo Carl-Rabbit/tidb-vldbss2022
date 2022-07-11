@@ -61,7 +61,6 @@ import (
 	hintBNL                 "BNL"
 	hintNoBNL               "NO_BNL"
 	hintHashJoin            "HASH_JOIN"
-	hintOrderedHashJoin     "ORDERED_HASH_JOIN"
 	hintNoHashJoin          "NO_HASH_JOIN"
 	hintMerge               "MERGE"
 	hintNoMerge             "NO_MERGE"
@@ -542,7 +541,6 @@ SupportedTableLevelOptimizerHintName:
 |	"NO_SWAP_JOIN_INPUTS"
 |	"INL_MERGE_JOIN"
 |	"HASH_JOIN"
-|	"ORDERED_HASH_JOIN"
 |	"LEADING"
 
 UnsupportedIndexLevelOptimizerHintName:
@@ -606,7 +604,6 @@ Identifier:
 |	"BNL"
 |	"NO_BNL"
 |	"HASH_JOIN"
-|	"ORDERED_HASH_JOIN"
 |	"NO_HASH_JOIN"
 |	"MERGE"
 |	"NO_MERGE"

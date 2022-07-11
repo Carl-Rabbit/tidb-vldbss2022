@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/tidb/br/pkg/lightning/config"
-	"github.com/pingcap/tidb/br/pkg/lightning/log"
 	md "github.com/pingcap/tidb/br/pkg/lightning/mydump"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	filter "github.com/pingcap/tidb/util/table-filter"
@@ -182,16 +181,13 @@ func TestTableInfoNotFound(t *testing.T) {
 	loader, err := md.NewMyDumpLoader(ctx, s.cfg)
 	require.NoError(t, err)
 	for _, dbMeta := range loader.GetDatabases() {
-		logger, buffer := log.MakeTestLogger()
-		logCtx := log.NewContext(ctx, logger)
-		dbSQL := dbMeta.GetSchema(logCtx, store)
+		dbSQL := dbMeta.GetSchema(ctx, store)
 		require.Equal(t, "CREATE DATABASE IF NOT EXISTS `db`", dbSQL)
 		for _, tblMeta := range dbMeta.Tables {
-			sql, err := tblMeta.GetSchema(logCtx, store)
+			sql, err := tblMeta.GetSchema(ctx, store)
 			require.Equal(t, "", sql)
 			require.NoError(t, err)
 		}
-		require.NotContains(t, buffer.Stripped(), "failed to extract table schema")
 	}
 }
 

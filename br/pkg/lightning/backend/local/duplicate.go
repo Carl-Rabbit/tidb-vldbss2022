@@ -223,7 +223,6 @@ func tableHandleKeyRanges(tableInfo *model.TableInfo) ([]tidbkv.KeyRange, error)
 // tableIndexKeyRanges returns all key ranges associated with the tableInfo and indexInfo.
 func tableIndexKeyRanges(tableInfo *model.TableInfo, indexInfo *model.IndexInfo) ([]tidbkv.KeyRange, error) {
 	tableIDs := physicalTableIDs(tableInfo)
-	//nolint: prealloc
 	var keyRanges []tidbkv.KeyRange
 	for _, tid := range tableIDs {
 		partitionKeysRanges, err := distsql.IndexRangesToKVRanges(nil, tid, indexInfo.ID, ranger.FullRange(), nil)
@@ -412,13 +411,12 @@ func NewDuplicateManager(
 	sessOpts *kv.SessionOptions,
 	concurrency int,
 	hasDupe *atomic.Bool,
-	logger log.Logger,
 ) (*DuplicateManager, error) {
-	logger = logger.With(zap.String("tableName", tableName))
-	decoder, err := kv.NewTableKVDecoder(tbl, tableName, sessOpts, logger)
+	decoder, err := kv.NewTableKVDecoder(tbl, tableName, sessOpts)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	logger := log.With(zap.String("tableName", tableName))
 	return &DuplicateManager{
 		tbl:         tbl,
 		tableName:   tableName,
@@ -607,7 +605,6 @@ func (m *DuplicateManager) buildLocalDupTasks(dupDB *pebble.DB, keyAdapter KeyAd
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	//nolint: prealloc
 	var newTasks []dupTask
 	for _, task := range tasks {
 		// FIXME: Do not hardcode sizeLimit and keysLimit.
@@ -708,11 +705,10 @@ func (m *DuplicateManager) processRemoteDupTaskOnce(
 	regionPool *utils.WorkerPool,
 	remainKeyRanges *pendingKeyRanges,
 ) (madeProgress bool, err error) {
-	//nolint: prealloc
-	var regions []*restore.RegionInfo
-	//nolint: prealloc
-	var keyRanges []tidbkv.KeyRange
-
+	var (
+		regions   []*restore.RegionInfo
+		keyRanges []tidbkv.KeyRange
+	)
 	for _, kr := range remainKeyRanges.list() {
 		subRegions, subKeyRanges, err := m.splitKeyRangeByRegions(ctx, kr)
 		if err != nil {

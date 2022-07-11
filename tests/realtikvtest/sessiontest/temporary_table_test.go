@@ -301,27 +301,22 @@ func TestTemporaryTableInterceptor(t *testing.T) {
 
 	initTxnFuncs := []func() error{
 		func() error {
-			err := tk.Session().PrepareTxnCtx(context.TODO())
-			if err == nil {
-				err = sessiontxn.GetTxnManager(tk.Session()).AdviseWarmup()
-			}
-			return err
+			return sessiontxn.WarmUpTxn(tk.Session())
 		},
 		func() error {
 			return sessiontxn.NewTxn(context.Background(), tk.Session())
 		},
 		func() error {
-			return sessiontxn.GetTxnManager(tk.Session()).EnterNewTxn(context.TODO(), &sessiontxn.EnterNewTxnRequest{
-				Type:        sessiontxn.EnterNewTxnWithBeginStmt,
-				StaleReadTS: 0,
-			})
+			return tk.Session().NewStaleTxnWithStartTS(context.Background(), 0)
+		},
+		func() error {
+			return tk.Session().InitTxnWithStartTS(0)
 		},
 	}
 
 	for _, initFunc := range initTxnFuncs {
 		require.NoError(t, initFunc())
 
-		require.NoError(t, sessiontxn.GetTxnManager(tk.Session()).OnStmtStart(context.TODO(), nil))
 		txn, err := tk.Session().Txn(true)
 		require.NoError(t, err)
 

@@ -151,16 +151,16 @@ func (o *OverRegionsInRangeController) runInRegion(ctx context.Context, f Region
 	if !result.OK() {
 		o.onError(ctx, result, region)
 		switch result.StrategyForRetry() {
-		case StrategyGiveUp:
+		case giveUp:
 			logutil.CL(ctx).Warn("unexpected error, should stop to retry", logutil.ShortError(&result), logutil.Region(region.Region))
 			return false, o.errors
-		case StrategyFromThisRegion:
+		case fromThisRegion:
 			logutil.CL(ctx).Warn("retry for region", logutil.Region(region.Region), logutil.ShortError(&result))
 			if !o.handleInRegionError(ctx, result, region) {
 				return false, o.Run(ctx, f)
 			}
 			return o.runInRegion(ctx, f, region)
-		case StrategyFromStart:
+		case fromStart:
 			logutil.CL(ctx).Warn("retry for execution over regions", logutil.ShortError(&result))
 			// TODO: make a backoffer considering more about the error info,
 			//       instead of ingore the result and retry.
@@ -196,48 +196,48 @@ func RPCResultOK() RPCResult {
 	return RPCResult{}
 }
 
-type RetryStrategy int
+type retryStrategy int
 
 const (
-	StrategyGiveUp RetryStrategy = iota
-	StrategyFromThisRegion
-	StrategyFromStart
+	giveUp retryStrategy = iota
+	fromThisRegion
+	fromStart
 )
 
-func (r *RPCResult) StrategyForRetry() RetryStrategy {
+func (r *RPCResult) StrategyForRetry() retryStrategy {
 	if r.Err != nil {
 		return r.StrategyForRetryGoError()
 	}
 	return r.StrategyForRetryStoreError()
 }
 
-func (r *RPCResult) StrategyForRetryStoreError() RetryStrategy {
+func (r *RPCResult) StrategyForRetryStoreError() retryStrategy {
 	if r.StoreError == nil && r.ImportError == "" {
-		return StrategyGiveUp
+		return giveUp
 	}
 
 	if r.StoreError.GetServerIsBusy() != nil ||
 		r.StoreError.GetRegionNotInitialized() != nil ||
 		r.StoreError.GetNotLeader() != nil {
-		return StrategyFromThisRegion
+		return fromThisRegion
 	}
 
-	return StrategyFromStart
+	return fromStart
 }
 
-func (r *RPCResult) StrategyForRetryGoError() RetryStrategy {
+func (r *RPCResult) StrategyForRetryGoError() retryStrategy {
 	if r.Err == nil {
-		return StrategyGiveUp
+		return giveUp
 	}
-	// we should unwrap the error or we cannot get the write gRPC status.
-	if gRPCErr, ok := status.FromError(errors.Cause(r.Err)); ok {
+
+	if gRPCErr, ok := status.FromError(r.Err); ok {
 		switch gRPCErr.Code() {
 		case codes.Unavailable, codes.Aborted, codes.ResourceExhausted:
-			return StrategyFromThisRegion
+			return fromThisRegion
 		}
 	}
 
-	return StrategyGiveUp
+	return giveUp
 }
 
 func (r *RPCResult) Error() string {

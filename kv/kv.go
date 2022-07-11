@@ -174,9 +174,6 @@ type MemBuffer interface {
 
 	// Size returns sum of keys and values length.
 	Size() int
-
-	// RemoveFromBuffer removes the entry from the buffer. It's used for testing.
-	RemoveFromBuffer(Key)
 }
 
 // LockCtx contains information for LockKeys method.
@@ -227,16 +224,16 @@ type Transaction interface {
 	// If a key doesn't exist, there shouldn't be any corresponding entry in the result map.
 	BatchGet(ctx context.Context, keys []Key) (map[string][]byte, error)
 	IsPessimistic() bool
-	// CacheTableInfo caches the index name.
+	// CacheIndexName caches the index name.
 	// PresumeKeyNotExists will use this to help decode error message.
 	CacheTableInfo(id int64, info *model.TableInfo)
-	// GetTableInfo returns the cached index name.
+	// GetIndexName returns the cached index name.
 	// If there is no such index already inserted through CacheIndexName, it will return UNKNOWN.
 	GetTableInfo(id int64) *model.TableInfo
 
-	// SetDiskFullOpt set allowed options of current operation in each TiKV disk usage level.
+	// set allowed options of current operation in each TiKV disk usage level.
 	SetDiskFullOpt(level kvrpcpb.DiskFullOpt)
-	// ClearDiskFullOpt clear allowed flag
+	// clear allowed flag
 	ClearDiskFullOpt()
 
 	// GetMemDBCheckpoint gets the transaction's memDB checkpoint.
@@ -341,6 +338,9 @@ type Request struct {
 	Desc bool
 	// NotFillCache makes this request do not touch the LRU cache of the underlying storage.
 	NotFillCache bool
+	// Streaming indicates using streaming API for this request, result in that one Next()
+	// call would not corresponds to a whole region result.
+	Streaming bool
 	// ReplicaRead is used for reading data from replicas, only follower is supported at this time.
 	ReplicaRead ReplicaReadType
 	// StoreType represents this request is sent to the which type of store.
